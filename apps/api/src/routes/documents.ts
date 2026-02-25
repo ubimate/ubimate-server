@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { randomUUID } from 'crypto';
+import type { Document, DocumentType, CreateDocumentPayload, UpdateDocumentPayload } from '@notefinity/types';
 import { db, stmts } from '../db/database';
 
 export const documentsRouter = Router();
@@ -8,27 +9,18 @@ export const documentsRouter = Router();
 // Types
 // ---------------------------------------------------------------------------
 
+/** Internal shape as stored in SQLite — properties is a raw JSON string. */
 interface DocumentRow {
   id: string;
   parent_id: string | null;
-  type: 'page' | 'folder' | 'workspace';
+  type: DocumentType;
   position: string;
-  properties: string; // JSON string in SQLite
+  properties: string; // JSON string — parsed by toOut()
   created_at: number;
   updated_at: number;
 }
 
-interface DocumentOut {
-  id: string;
-  parent_id: string | null;
-  type: 'page' | 'folder' | 'workspace';
-  position: string;
-  properties: Record<string, unknown>;
-  created_at: number;
-  updated_at: number;
-}
-
-function toOut(row: DocumentRow): DocumentOut {
+function toOut(row: DocumentRow): Document {
   return {
     ...row,
     properties: JSON.parse(row.properties),
@@ -58,12 +50,7 @@ documentsRouter.get('/:id', (req: Request, res: Response) => {
 // Body: { parent_id?, type, position?, properties? }
 // ---------------------------------------------------------------------------
 documentsRouter.post('/', (req: Request, res: Response) => {
-  const { parent_id = null, type, position = 'a0', properties = {} } = req.body as {
-    parent_id?: string | null;
-    type: 'page' | 'folder' | 'workspace';
-    position?: string;
-    properties?: Record<string, unknown>;
-  };
+  const { parent_id = null, type, position = 'a0', properties = {} } = req.body as CreateDocumentPayload;
 
   if (!type || !['page', 'folder', 'workspace'].includes(type)) {
     return res.status(400).json({ error: 'Invalid or missing `type`' });
@@ -93,12 +80,7 @@ documentsRouter.put('/:id', (req: Request, res: Response) => {
   const existing = stmts.getDocument.get(req.params.id) as DocumentRow | undefined;
   if (!existing) return res.status(404).json({ error: 'Document not found' });
 
-  const { parent_id, type, position, properties } = req.body as {
-    parent_id?: string | null;
-    type?: 'page' | 'folder' | 'workspace';
-    position?: string;
-    properties?: Record<string, unknown>;
-  };
+  const { parent_id, type, position, properties } = req.body as UpdateDocumentPayload;
 
   const updated = {
     id: existing.id,
