@@ -91,6 +91,19 @@ export const stmts = {
     LIMIT 1
   `),
 
+  /**
+   * Returns the highest position value among siblings that sort strictly before
+   * a given position, excluding a specific document id (the one being moved).
+   */
+  siblingPositionBefore: db.prepare(`
+    SELECT position FROM documents
+    WHERE parent_id IS @parent_id
+      AND position < @before_pos
+      AND id != @exclude_id
+    ORDER BY position DESC
+    LIMIT 1
+  `),
+
   // yjs_updates
   getYjsUpdates: db.prepare(`
     SELECT data FROM yjs_updates

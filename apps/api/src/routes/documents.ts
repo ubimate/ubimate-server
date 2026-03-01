@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { randomUUID } from 'crypto';
-import type { Document, DocumentType, CreateDocumentPayload, UpdateDocumentPayload } from '@notefinity/types';
+import type { Document, DocumentType, CreateDocumentPayload, UpdateDocumentPayload, RepositionDocumentPayload } from '@notefinity/types';
 import { generateKeyBetween } from '@notefinity/utils';
 import { db, stmts } from '../db/database';
 
@@ -96,6 +96,53 @@ documentsRouter.put('/:id', (req: Request, res: Response) => {
     properties: properties  !== undefined
       ? JSON.stringify(properties)
       : existing.properties,
+    updated_at: Date.now(),
+  };
+
+  stmts.updateDocument.run(updated);
+  res.json(toOut({ ...updated, created_at: existing.created_at }));
+});
+
+// ---------------------------------------------------------------------------
+// PATCH /api/documents/:id/reposition
+// Body: { parent_id: string | null, before_id: string | null }
+// Moves the document under parent_id, placing it immediately before before_id.
+// Pass before_id: null to append at the end of the sibling list.
+// ---------------------------------------------------------------------------
+documentsRouter.patch('/:id/reposition', (req: Request, res: Response) => {
+  const existing = stmts.getDocument.get(req.params.id) as DocumentRow | undefined;
+  if (!existing) return res.status(404).json({ error: 'Document not found' });
+
+  const { parent_id = null, before_id = null } = req.body as RepositionDocumentPayload;
+
+  let position: string;
+
+  if (before_id === null) {
+    // Append after the last sibling in the target parent.
+    const lastRow = stmts.lastSiblingPosition.get(parent_id) as { position: string } | undefined;
+    // Exclude the document itself when it is already in this parent.
+    const lastPos = lastRow && lastRow.position !== existing.position ? lastRow.position : null;
+    position = generateKeyBetween(lastPos, null);
+  } else {
+    // Insert immediately before before_id.
+    const beforeDoc = stmts.getDocument.get(before_id) as DocumentRow | undefined;
+    if (!beforeDoc) return res.status(404).json({ error: 'before_id document not found' });
+
+    const prevRow = stmts.siblingPositionBefore.get({
+      parent_id,
+      before_pos: beforeDoc.position,
+      exclude_id: existing.id,
+    }) as { position: string } | undefined;
+
+    position = generateKeyBetween(prevRow?.position ?? null, beforeDoc.position);
+  }
+
+  const updated = {
+    id: existing.id,
+    parent_id,
+    type: existing.type,
+    position,
+    properties: existing.properties,
     updated_at: Date.now(),
   };
 

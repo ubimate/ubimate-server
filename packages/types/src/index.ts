@@ -28,6 +28,16 @@ export interface CreateDocumentPayload {
   properties?: Record<string, unknown>;
 }
 
+/**
+ * Payload for PATCH /api/documents/:id/reposition
+ * Moves the document under `parent_id`, placing it immediately before `before_id`.
+ * Pass `before_id: null` to append at the end of the sibling list.
+ */
+export interface RepositionDocumentPayload {
+  parent_id: string | null;
+  before_id: string | null;
+}
+
 /** Payload for PUT /api/documents/:id — all fields optional (partial update). */
 export interface UpdateDocumentPayload {
   parent_id?: string | null;
