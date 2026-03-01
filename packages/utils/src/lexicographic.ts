@@ -17,6 +17,12 @@ const MIDPOINT = 'n' // Character at position 31 (roughly middle of our 62-char 
  * @returns A new lexicographic string that sorts between before and after
  */
 export function generateKeyBetween(before: string | null, after: string | null): string {
+  const ret = _generateKeyBetween(before, after);
+  console.log('Generated key between', { before, after, result: ret });
+  return ret;
+}
+
+function _generateKeyBetween(before: string | null, after: string | null): string {
   // If both null, return midpoint
   if (!before && !after) {
     return MIDPOINT
