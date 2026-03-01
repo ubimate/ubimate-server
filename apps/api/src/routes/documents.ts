@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { randomUUID } from 'crypto';
 import type { Document, DocumentType, CreateDocumentPayload, UpdateDocumentPayload } from '@notefinity/types';
+import { generateKeyBetween } from '@notefinity/utils';
 import { db, stmts } from '../db/database';
 
 export const documentsRouter = Router();
@@ -50,7 +51,12 @@ documentsRouter.get('/:id', (req: Request, res: Response) => {
 // Body: { parent_id?, type, position?, properties? }
 // ---------------------------------------------------------------------------
 documentsRouter.post('/', (req: Request, res: Response) => {
-  const { parent_id = null, type, position = 'a0', properties = {} } = req.body as CreateDocumentPayload;
+  const { parent_id = null, type, properties = {} } = req.body as CreateDocumentPayload;
+
+  // Derive position: place after the last sibling, or use the client-supplied value if present.
+  const lastRow = stmts.lastSiblingPosition.get(parent_id) as { position: string } | undefined;
+  const position = (req.body as CreateDocumentPayload).position
+    ?? generateKeyBetween(lastRow?.position ?? null, null);
 
   if (!type || !['page', 'folder', 'workspace'].includes(type)) {
     return res.status(400).json({ error: 'Invalid or missing `type`' });

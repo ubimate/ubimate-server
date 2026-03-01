@@ -83,6 +83,14 @@ export const stmts = {
 
   deleteDocument: db.prepare(`DELETE FROM documents WHERE id = ?`),
 
+  /** Returns the highest position value among siblings sharing the same parent_id. */
+  lastSiblingPosition: db.prepare(`
+    SELECT position FROM documents
+    WHERE parent_id IS ?
+    ORDER BY position DESC
+    LIMIT 1
+  `),
+
   // yjs_updates
   getYjsUpdates: db.prepare(`
     SELECT data FROM yjs_updates
