@@ -19,5 +19,8 @@
   "devDependencies": {
     "typescript": "~5.9.3",
     "vitest": "^4.0.0"
+  },
+  "dependencies": {
+    "frac-indexes": "^1.1.1"
   }
 }
