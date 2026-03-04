@@ -1,6 +1,15 @@
 import { Router, Request, Response } from 'express';
 import { randomUUID } from 'crypto';
-import type { Document, DocumentType, CreateDocumentPayload, UpdateDocumentPayload, RepositionDocumentPayload } from '@notefinity/types';
+import type {
+  Document,
+  DocumentType,
+  CreateDocumentPayload,
+  UpdateDocumentPayload,
+  RepositionDocumentPayload,
+  StructOp,
+  SyncStructuralPayload,
+  SyncStructuralResult,
+} from '@notefinity/types';
 import { generateKeyBetween } from '@notefinity/utils';
 import { db, stmts } from '../db/database';
 
@@ -19,12 +28,19 @@ interface DocumentRow {
   properties: string; // JSON string — parsed by toOut()
   created_at: number;
   updated_at: number;
+  /** Unix ms of the last structural operation applied to this document. Used for LWW sync. */
+  last_struct_ts: number;
 }
 
 function toOut(row: DocumentRow): Document {
   return {
-    ...row,
+    id: row.id,
+    parent_id: row.parent_id,
+    type: row.type,
+    position: row.position,
     properties: JSON.parse(row.properties),
+    created_at: row.created_at,
+    updated_at: row.updated_at,
   };
 }
 
@@ -71,10 +87,11 @@ documentsRouter.post('/', (req: Request, res: Response) => {
     properties: JSON.stringify(properties),
     created_at: now,
     updated_at: now,
+    last_struct_ts: now,
   };
 
   stmts.insertDocument.run(doc);
-  res.status(201).json(toOut({ ...doc, properties: JSON.stringify(properties) }));
+  res.status(201).json(toOut({ ...doc }));
 });
 
 // ---------------------------------------------------------------------------
@@ -90,13 +107,14 @@ documentsRouter.put('/:id', (req: Request, res: Response) => {
 
   const updated = {
     id: existing.id,
-    parent_id:  parent_id  !== undefined ? parent_id  : existing.parent_id,
-    type:       type        !== undefined ? type        : existing.type,
-    position:   position    !== undefined ? position    : existing.position,
-    properties: properties  !== undefined
+    parent_id:     parent_id  !== undefined ? parent_id  : existing.parent_id,
+    type:          type        !== undefined ? type        : existing.type,
+    position:      position    !== undefined ? position    : existing.position,
+    properties:    properties  !== undefined
       ? JSON.stringify(properties)
       : existing.properties,
-    updated_at: Date.now(),
+    updated_at:    Date.now(),
+    last_struct_ts: existing.last_struct_ts,
   };
 
   stmts.updateDocument.run(updated);
@@ -105,15 +123,23 @@ documentsRouter.put('/:id', (req: Request, res: Response) => {
 
 // ---------------------------------------------------------------------------
 // PATCH /api/documents/:id/reposition
-// Body: { parent_id: string | null, before_id: string | null }
+// Body: { parent_id: string | null, before_id: string | null, client_ts?: number }
 // Moves the document under parent_id, placing it immediately before before_id.
 // Pass before_id: null to append at the end of the sibling list.
+// If client_ts is supplied, last-write-wins semantics are applied: the operation
+// is skipped (returning the current doc state) when a newer op has already won.
 // ---------------------------------------------------------------------------
 documentsRouter.patch('/:id/reposition', (req: Request, res: Response) => {
   const existing = stmts.getDocument.get(req.params.id) as DocumentRow | undefined;
   if (!existing) return res.status(404).json({ error: 'Document not found' });
 
-  const { parent_id = null, before_id = null } = req.body as RepositionDocumentPayload;
+  const { parent_id = null, before_id = null, client_ts } = req.body as RepositionDocumentPayload;
+
+  // LWW check: if caller supplied a timestamp and a newer structural op has
+  // already been applied, return current state without mutating anything.
+  if (client_ts !== undefined && client_ts <= existing.last_struct_ts) {
+    return res.json(toOut(existing));
+  }
 
   let position: string;
 
@@ -144,10 +170,150 @@ documentsRouter.patch('/:id/reposition', (req: Request, res: Response) => {
     position,
     properties: existing.properties,
     updated_at: Date.now(),
+    last_struct_ts: client_ts ?? Date.now(),
   };
 
-  stmts.updateDocument.run(updated);
+  stmts.repositionDocument.run(updated);
   res.json(toOut({ ...updated, created_at: existing.created_at }));
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/sync/structural
+// Body: { ops: StructOp[] }
+//
+// Replays a batch of structural operations recorded by an offline local app.
+// Ops are sorted by client_ts (ascending) so older decisions are applied first
+// and the most-recent intent for each document ends up winning (LWW).
+// All ops run inside a single SQLite transaction for atomicity.
+//
+// Returns the full canonical document list after the batch so the caller can
+// overwrite its local state with the authoritative server state.
+// ---------------------------------------------------------------------------
+documentsRouter.post('/sync/structural', (req: Request, res: Response) => {
+  const { ops } = req.body as SyncStructuralPayload;
+
+  if (!Array.isArray(ops)) {
+    return res.status(400).json({ error: '`ops` must be an array' });
+  }
+
+  // Sort ascending so older decisions are applied first; newer ones overwrite.
+  const sorted = [...ops].sort((a, b) => a.client_ts - b.client_ts);
+
+  let applied = 0;
+  let skipped = 0;
+
+  db.transaction(() => {
+    for (const op of sorted) {
+      const existing = stmts.getDocument.get(op.id) as DocumentRow | undefined;
+
+      if (op.op === 'create') {
+        // ------------------------------------------------------------------
+        // Idempotent insert: skip entirely if the document already exists.
+        // (A create can arrive twice if the client retries after a network
+        //  blip; the second copy is harmless to discard.)
+        // ------------------------------------------------------------------
+        if (existing) { skipped++; continue; }
+
+        const payload = op.payload as CreateDocumentPayload;
+        if (!payload.type || !['page', 'folder', 'workspace'].includes(payload.type)) {
+          skipped++; continue;
+        }
+        const lastRow = stmts.lastSiblingPosition.get(payload.parent_id ?? null) as
+          { position: string } | undefined;
+        const position = payload.position ?? generateKeyBetween(lastRow?.position ?? null, null);
+
+        stmts.insertDocument.run({
+          id:            op.id,
+          parent_id:     payload.parent_id ?? null,
+          type:          payload.type,
+          position,
+          properties:    JSON.stringify(payload.properties ?? {}),
+          created_at:    op.client_ts,
+          updated_at:    op.client_ts,
+          last_struct_ts: op.client_ts,
+        });
+        applied++;
+        continue;
+      }
+
+      if (op.op === 'delete') {
+        // ------------------------------------------------------------------
+        // LWW delete: only delete if this op is newer than the last structural
+        // change recorded on the document (prevents a stale offline delete
+        // from removing an item that was renamed/moved more recently).
+        // ------------------------------------------------------------------
+        if (!existing) { skipped++; continue; }
+        if (op.client_ts <= existing.last_struct_ts) { skipped++; continue; }
+
+        stmts.deleteDocument.run(op.id);
+        applied++;
+        continue;
+      }
+
+      if (op.op === 'reposition') {
+        if (!existing) { skipped++; continue; }
+        if (op.client_ts <= existing.last_struct_ts) { skipped++; continue; }
+
+        const { parent_id = null, before_id = null } =
+          op.payload as RepositionDocumentPayload;
+
+        let position: string;
+        if (before_id === null) {
+          const lastRow = stmts.lastSiblingPosition.get(parent_id) as
+            { position: string } | undefined;
+          const lastPos = lastRow && lastRow.position !== existing.position
+            ? lastRow.position
+            : null;
+          position = generateKeyBetween(lastPos, null);
+        } else {
+          const beforeDoc = stmts.getDocument.get(before_id) as DocumentRow | undefined;
+          if (!beforeDoc) { skipped++; continue; }
+          const prevRow = stmts.siblingPositionBefore.get({
+            parent_id,
+            before_pos: beforeDoc.position,
+            exclude_id: existing.id,
+          }) as { position: string } | undefined;
+          position = generateKeyBetween(prevRow?.position ?? null, beforeDoc.position);
+        }
+
+        stmts.repositionDocument.run({
+          id:            existing.id,
+          parent_id,
+          position,
+          updated_at:    op.client_ts,
+          last_struct_ts: op.client_ts,
+        });
+        applied++;
+        continue;
+      }
+
+      if (op.op === 'update_properties') {
+        if (!existing) { skipped++; continue; }
+        if (op.client_ts <= existing.last_struct_ts) { skipped++; continue; }
+
+        const payload = op.payload as UpdateDocumentPayload;
+        stmts.syncUpdateProperties.run({
+          id:            op.id,
+          properties:    JSON.stringify(payload.properties ?? JSON.parse(existing.properties)),
+          updated_at:    op.client_ts,
+          last_struct_ts: op.client_ts,
+        });
+        applied++;
+        continue;
+      }
+
+      // Unknown op kind — skip
+      skipped++;
+    }
+  })();
+
+  const allRows = stmts.listDocuments.all() as DocumentRow[];
+  const result: SyncStructuralResult = {
+    applied,
+    skipped,
+    documents: allRows.map(toOut),
+  };
+  res.json(result);
 });
 
 // ---------------------------------------------------------------------------

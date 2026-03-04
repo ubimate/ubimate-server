@@ -21,13 +21,14 @@ db.pragma('foreign_keys = ON');
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS documents (
-    id        TEXT    PRIMARY KEY,
-    parent_id TEXT    REFERENCES documents(id) ON DELETE CASCADE,
-    type      TEXT    NOT NULL CHECK(type IN ('page', 'folder', 'workspace')),
-    position  TEXT    NOT NULL DEFAULT 'a0',
-    properties TEXT   NOT NULL DEFAULT '{}',
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
+    id             TEXT    PRIMARY KEY,
+    parent_id      TEXT    REFERENCES documents(id) ON DELETE CASCADE,
+    type           TEXT    NOT NULL CHECK(type IN ('page', 'folder', 'workspace')),
+    position       TEXT    NOT NULL DEFAULT 'a0',
+    properties     TEXT    NOT NULL DEFAULT '{}',
+    created_at     INTEGER NOT NULL,
+    updated_at     INTEGER NOT NULL,
+    last_struct_ts INTEGER NOT NULL DEFAULT 0
   );
 
   CREATE TABLE IF NOT EXISTS yjs_updates (
@@ -49,35 +50,83 @@ db.exec(`
 `);
 
 // ---------------------------------------------------------------------------
+// Schema migrations
+// ---------------------------------------------------------------------------
+
+/**
+ * Incremental migrations keyed by version number.
+ * Each migration runs exactly once; the applied version is stored in schema_version.
+ * Add new entries to the END of this list only — never renumber existing ones.
+ */
+const MIGRATIONS: Array<{ version: number; sql: string }> = [
+  {
+    // v1: add last_struct_ts for last-write-wins offline-sync semantics.
+    // ALTER TABLE is safe to run on DBs created before this field was in the
+    // CREATE TABLE statement above; on new DBs the column already exists (ignored).
+    version: 1,
+    sql: `ALTER TABLE documents ADD COLUMN last_struct_ts INTEGER NOT NULL DEFAULT 0`,
+  },
+];
+
+function runMigrations(): void {
+  const currentVersion =
+    (db.prepare('SELECT MAX(version) as v FROM schema_version').get() as { v: number | null }).v ?? 0;
+
+  for (const migration of MIGRATIONS) {
+    if (migration.version <= currentVersion) continue;
+    db.transaction(() => {
+      try {
+        db.exec(migration.sql);
+      } catch (err: unknown) {
+        // SQLite raises an error if the column already exists (DB was created with the
+        // new schema). Treat that as a no-op so the migration still records its version.
+        if (err instanceof Error && err.message.includes('duplicate column name')) {
+          // column already present — nothing to do
+        } else {
+          throw err;
+        }
+      }
+      db.prepare('INSERT INTO schema_version (version, migrated_at) VALUES (?, ?)').run(
+        migration.version,
+        Date.now(),
+      );
+    })();
+  }
+}
+
+runMigrations();
+
+// ---------------------------------------------------------------------------
 // Prepared statements
 // ---------------------------------------------------------------------------
 
 // documents
 export const stmts = {
   listDocuments: db.prepare(`
-    SELECT id, parent_id, type, position, properties, created_at, updated_at
+    SELECT id, parent_id, type, position, properties, created_at, updated_at, last_struct_ts
     FROM documents
     ORDER BY position ASC
   `),
 
   getDocument: db.prepare(`
-    SELECT id, parent_id, type, position, properties, created_at, updated_at
+    SELECT id, parent_id, type, position, properties, created_at, updated_at, last_struct_ts
     FROM documents
     WHERE id = ?
   `),
 
   insertDocument: db.prepare(`
-    INSERT INTO documents (id, parent_id, type, position, properties, created_at, updated_at)
-    VALUES (@id, @parent_id, @type, @position, @properties, @created_at, @updated_at)
+    INSERT INTO documents (id, parent_id, type, position, properties, created_at, updated_at, last_struct_ts)
+    VALUES (@id, @parent_id, @type, @position, @properties, @created_at, @updated_at, @last_struct_ts)
   `),
 
   updateDocument: db.prepare(`
     UPDATE documents
-    SET parent_id  = @parent_id,
-        type       = @type,
-        position   = @position,
-        properties = @properties,
-        updated_at = @updated_at
+    SET parent_id      = @parent_id,
+        type           = @type,
+        position       = @position,
+        properties     = @properties,
+        updated_at     = @updated_at,
+        last_struct_ts = @last_struct_ts
     WHERE id = @id
   `),
 
@@ -88,6 +137,28 @@ export const stmts = {
     UPDATE documents
     SET properties = @properties,
         updated_at = @updated_at
+    WHERE id = @id
+  `),
+
+  /**
+   * Update position + parent_id + last_struct_ts for a reposition operation.
+   * Only called when the LWW check has already passed.
+   */
+  repositionDocument: db.prepare(`
+    UPDATE documents
+    SET parent_id      = @parent_id,
+        position       = @position,
+        updated_at     = @updated_at,
+        last_struct_ts = @last_struct_ts
+    WHERE id = @id
+  `),
+
+  /** Update only properties when replaying an update_properties sync op. */
+  syncUpdateProperties: db.prepare(`
+    UPDATE documents
+    SET properties     = @properties,
+        updated_at     = @updated_at,
+        last_struct_ts = @last_struct_ts
     WHERE id = @id
   `),
 
