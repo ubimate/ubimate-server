@@ -6,6 +6,7 @@ import {
   countYjsUpdates,
   getYjsUpdates,
   COMPACT_THRESHOLD,
+  stmts,
 } from './db/database';
 
 // ---------------------------------------------------------------------------
@@ -51,10 +52,25 @@ export const hocuspocus = Server.configure({
 
   /**
    * Persist the incoming delta update to SQLite.
+   * Also sync the properties Y.Map back to the documents table (denormalized cache)
+   * so REST list/get endpoints always return up-to-date metadata without having to
+   * decode the Yjs binary state.
    * Compact the log if the row count exceeds the threshold.
    */
   async onChange({ document, documentName, update }: onChangePayload) {
     appendYjsUpdate(documentName, update);
+
+    // Write-through: extract properties Y.Map and cache in the documents row.
+    const propsMap = document.getMap<unknown>('properties');
+    if (propsMap.size > 0) {
+      const props: Record<string, unknown> = {};
+      propsMap.forEach((v, k) => { props[k] = v; });
+      stmts.updateDocumentProperties.run({
+        id: documentName,
+        properties: JSON.stringify(props),
+        updated_at: Date.now(),
+      });
+    }
 
     const rowCount = countYjsUpdates(documentName);
     if (rowCount >= COMPACT_THRESHOLD) {

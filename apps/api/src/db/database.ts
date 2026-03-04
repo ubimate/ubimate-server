@@ -83,6 +83,14 @@ export const stmts = {
 
   deleteDocument: db.prepare(`DELETE FROM documents WHERE id = ?`),
 
+  /** Update only the properties + updated_at of a document (Yjs write-through cache). */
+  updateDocumentProperties: db.prepare(`
+    UPDATE documents
+    SET properties = @properties,
+        updated_at = @updated_at
+    WHERE id = @id
+  `),
+
   /** Returns the highest position value among siblings sharing the same parent_id. */
   lastSiblingPosition: db.prepare(`
     SELECT position FROM documents
