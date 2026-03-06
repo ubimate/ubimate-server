@@ -1,6 +1,8 @@
 import express from 'express';
 import cors from 'cors';
+import path from 'path';
 import { documentsRouter } from './routes/documents';
+import { uploadsRouter } from './routes/uploads';
 import { hocuspocus } from './hocuspocus';
 
 const API_PORT = Number(process.env.API_PORT) || 3001;
@@ -23,6 +25,10 @@ app.get('/api/health', (_req, res) => {
 });
 
 app.use('/api/documents', documentsRouter);
+app.use('/api/uploads', uploadsRouter);
+
+// Serve uploaded files as static assets.
+app.use('/uploads', express.static(path.join(process.cwd(), 'data', 'uploads')));
 
 app.listen(API_PORT, () => {
   console.log(`[api]   REST API listening on http://localhost:${API_PORT}`);
