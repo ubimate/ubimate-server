@@ -1,5 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { randomUUID } from 'crypto';
+import path from 'path';
+import fs from 'fs';
 import type {
   Document,
   DocumentType,
@@ -319,10 +321,44 @@ documentsRouter.post('/sync/structural', (req: Request, res: Response) => {
 // ---------------------------------------------------------------------------
 // DELETE /api/documents/:id
 // Cascades to child documents and yjs_updates via FK constraint.
+// For image documents, also removes the uploaded file from disk.
 // ---------------------------------------------------------------------------
 documentsRouter.delete('/:id', (req: Request, res: Response) => {
   const existing = stmts.getDocument.get(req.params.id) as DocumentRow | undefined;
   if (!existing) return res.status(404).json({ error: 'Document not found' });
+
+  // Gather all image-type descendants (including the root doc itself) so
+  // their uploaded files can be removed before the rows are cascade-deleted.
+  const subtree = (db.prepare(`
+    WITH RECURSIVE subtree(id, type, properties) AS (
+      SELECT id, type, properties FROM documents WHERE id = ?
+      UNION ALL
+      SELECT d.id, d.type, d.properties
+      FROM documents d
+      JOIN subtree s ON d.parent_id = s.id
+    )
+    SELECT type, properties FROM subtree WHERE type = 'image'
+  `).all(req.params.id) as Array<{ type: string; properties: string }>);
+
+  for (const row of subtree) {
+    try {
+      const props = JSON.parse(row.properties) as Record<string, unknown>;
+      const src = typeof props.src === 'string' ? props.src : null;
+      if (!src) continue;
+      // src is an absolute URL; extract the pathname and strip /uploads/
+      const pathname = new URL(src).pathname; // e.g. /uploads/uuid.png
+      const filename = path.basename(pathname);
+      if (!filename || filename.includes('/') || filename.includes('..')) continue;
+      const filePath = path.join(process.cwd(), 'data', 'uploads', filename);
+      fs.unlink(filePath, (err) => {
+        if (err && err.code !== 'ENOENT') {
+          console.error(`[uploads] Failed to delete ${filePath}:`, err.message);
+        }
+      });
+    } catch {
+      // Malformed URL or JSON — skip silently.
+    }
+  }
 
   stmts.deleteDocument.run(req.params.id);
   res.status(204).end();
