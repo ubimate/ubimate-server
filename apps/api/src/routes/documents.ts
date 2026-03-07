@@ -74,7 +74,7 @@ documentsRouter.post('/', (req: Request, res: Response) => {
   const position = (req.body as CreateDocumentPayload).position
     ?? generateKeyBetween(lastRow?.position ?? null, null);
 
-  if (!type || !['page', 'folder', 'workspace'].includes(type)) {
+  if (!type || !['page', 'folder', 'workspace', 'image'].includes(type)) {
     return res.status(400).json({ error: 'Invalid or missing `type`' });
   }
 

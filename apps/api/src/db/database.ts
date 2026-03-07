@@ -23,7 +23,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS documents (
     id             TEXT    PRIMARY KEY,
     parent_id      TEXT    REFERENCES documents(id) ON DELETE CASCADE,
-    type           TEXT    NOT NULL CHECK(type IN ('page', 'folder', 'workspace')),
+    type           TEXT    NOT NULL CHECK(type IN ('page', 'folder', 'workspace', 'image')),
     position       TEXT    NOT NULL DEFAULT 'a0',
     properties     TEXT    NOT NULL DEFAULT '{}',
     created_at     INTEGER NOT NULL,
@@ -58,13 +58,40 @@ db.exec(`
  * Each migration runs exactly once; the applied version is stored in schema_version.
  * Add new entries to the END of this list only — never renumber existing ones.
  */
-const MIGRATIONS: Array<{ version: number; sql: string }> = [
+const MIGRATIONS: Array<{ version: number; sql?: string; run?: () => void }> = [
   {
     // v1: add last_struct_ts for last-write-wins offline-sync semantics.
     // ALTER TABLE is safe to run on DBs created before this field was in the
     // CREATE TABLE statement above; on new DBs the column already exists (ignored).
     version: 1,
     sql: `ALTER TABLE documents ADD COLUMN last_struct_ts INTEGER NOT NULL DEFAULT 0`,
+  },
+  {
+    // v2: broaden the type CHECK constraint to include 'image'.
+    // SQLite does not support ALTER TABLE to change a CHECK constraint, so we
+    // recreate the table using the standard SQLite "12-step" rename procedure.
+    version: 2,
+    run: () => {
+      db.pragma('foreign_keys = OFF');
+      db.exec(`
+        CREATE TABLE documents_new (
+          id             TEXT    PRIMARY KEY,
+          parent_id      TEXT    REFERENCES documents_new(id) ON DELETE CASCADE,
+          type           TEXT    NOT NULL CHECK(type IN ('page', 'folder', 'workspace', 'image')),
+          position       TEXT    NOT NULL DEFAULT 'a0',
+          properties     TEXT    NOT NULL DEFAULT '{}',
+          created_at     INTEGER NOT NULL,
+          updated_at     INTEGER NOT NULL,
+          last_struct_ts INTEGER NOT NULL DEFAULT 0
+        );
+        INSERT INTO documents_new SELECT * FROM documents;
+        DROP TABLE documents;
+        ALTER TABLE documents_new RENAME TO documents;
+        CREATE INDEX IF NOT EXISTS idx_documents_parent_id ON documents(parent_id);
+        CREATE INDEX IF NOT EXISTS idx_documents_type      ON documents(type);
+      `);
+      db.pragma('foreign_keys = ON');
+    },
   },
 ];
 
@@ -74,23 +101,33 @@ function runMigrations(): void {
 
   for (const migration of MIGRATIONS) {
     if (migration.version <= currentVersion) continue;
-    db.transaction(() => {
-      try {
-        db.exec(migration.sql);
-      } catch (err: unknown) {
-        // SQLite raises an error if the column already exists (DB was created with the
-        // new schema). Treat that as a no-op so the migration still records its version.
-        if (err instanceof Error && err.message.includes('duplicate column name')) {
-          // column already present — nothing to do
-        } else {
-          throw err;
-        }
-      }
+    if (migration.run) {
+      // Custom migration: runs outside a normal transaction so it can issue
+      // PRAGMAs (like foreign_keys = OFF) that must be outside transactions.
+      migration.run();
       db.prepare('INSERT INTO schema_version (version, migrated_at) VALUES (?, ?)').run(
         migration.version,
         Date.now(),
       );
-    })();
+    } else {
+      db.transaction(() => {
+        try {
+          db.exec(migration.sql!);
+        } catch (err: unknown) {
+          // SQLite raises an error if the column already exists (DB was created with the
+          // new schema). Treat that as a no-op so the migration still records its version.
+          if (err instanceof Error && err.message.includes('duplicate column name')) {
+            // column already present — nothing to do
+          } else {
+            throw err;
+          }
+        }
+        db.prepare('INSERT INTO schema_version (version, migrated_at) VALUES (?, ?)').run(
+          migration.version,
+          Date.now(),
+        );
+      })();
+    }
   }
 }
 
