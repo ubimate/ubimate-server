@@ -22,9 +22,26 @@ const API_PORT = Number(process.env.API_PORT) || 3001;
 
 const app = express();
 
+// In production set CORS_ORIGIN to the exact origin (e.g. https://app.notefinity.com).
+// In development we allow any localhost / 127.0.0.1 / ::1 origin on any port
+// so Safari, Chrome, and Tauri webviews all work without extra config.
+const corsOrigin: cors.CorsOptions['origin'] = process.env.CORS_ORIGIN
+  ? process.env.CORS_ORIGIN
+  : (origin, callback) => {
+      // Allow requests with no origin (same-origin, Tauri, curl, etc.)
+      if (!origin) return callback(null, true);
+      const url = new URL(origin);
+      const isLocal =
+        url.hostname === 'localhost' ||
+        url.hostname === '127.0.0.1' ||
+        url.hostname === '::1';
+      callback(isLocal ? null : new Error('Not allowed by CORS'), isLocal);
+    };
+
 app.use(cors({
-  origin: process.env.CORS_ORIGIN || 'http://localhost:5173',
+  origin: corsOrigin,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  credentials: true,
 }));
 
 app.use(express.json());
