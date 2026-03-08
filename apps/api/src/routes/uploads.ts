@@ -4,7 +4,7 @@ import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 
-const UPLOADS_DIR = path.join(process.cwd(), 'data', 'uploads');
+const UPLOADS_DIR = path.join(__dirname, '../../data', 'uploads');
 const MAX_SIZE_BYTES = (Number(process.env.UPLOAD_MAX_SIZE_MB) || 10) * 1024 * 1024;
 
 const ALLOWED_MIME_TYPES = new Set([

@@ -54,7 +54,7 @@ app.use('/api/documents', documentsRouter);
 app.use('/api/uploads', uploadsRouter);
 
 // Serve uploaded files as static assets; fall through to fallback if not found.
-app.use('/uploads', express.static(path.join(process.cwd(), 'data', 'uploads')));
+app.use('/uploads', express.static(path.join(__dirname, '../data', 'uploads')));
 
 // Fallback: return a "no image" SVG for any missing upload.
 app.get('/uploads/:filename', (_req, res) => {
