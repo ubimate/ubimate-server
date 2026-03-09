@@ -1,6 +1,6 @@
 FROM node:20-alpine
 
-RUN npm install -g pnpm
+RUN npm install -g pnpm@8.9.2
 
 WORKDIR /app
 
@@ -16,6 +16,7 @@ RUN pnpm install --frozen-lockfile
 # Copy source and build
 COPY packages/ packages/
 COPY apps/api/ apps/api/
+RUN pnpm --filter @notefinity/utils build
 RUN pnpm --filter api build
 
 ENV NODE_ENV=production
