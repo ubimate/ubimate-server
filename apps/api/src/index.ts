@@ -16,6 +16,12 @@ const NO_IMAGE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 1
 
 const API_PORT = Number(process.env.API_PORT) || 3001;
 
+// Resolve data directory the same way database.ts and uploads.ts do so that
+// setting DATA_DIR=/data (e.g. for a CapRover persistent volume) is honoured
+// everywhere — both for writing files and for serving them.
+const DATA_DIR = process.env.DATA_DIR ?? path.join(__dirname, '../data');
+const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
+
 // ---------------------------------------------------------------------------
 // Express – REST API
 // ---------------------------------------------------------------------------
@@ -54,7 +60,7 @@ app.use('/api/documents', documentsRouter);
 app.use('/api/uploads', uploadsRouter);
 
 // Serve uploaded files as static assets; fall through to fallback if not found.
-app.use('/uploads', express.static(path.join(__dirname, '../data', 'uploads')));
+app.use('/uploads', express.static(UPLOADS_DIR));
 
 // Fallback: return a "no image" SVG for any missing upload.
 app.get('/uploads/:filename', (_req, res) => {
