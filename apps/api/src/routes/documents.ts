@@ -18,6 +18,23 @@ import { db, stmts } from '../db/database';
 export const documentsRouter = Router();
 
 // ---------------------------------------------------------------------------
+// SSE — tree-change notifications
+// ---------------------------------------------------------------------------
+
+/** All currently open SSE response streams. */
+const sseClients = new Set<Response>();
+
+/**
+ * Broadcast a tree-changed event to every connected SSE client.
+ * Fire-and-forget — called after each mutating route completes.
+ */
+export function broadcastTreeChanged(): void {
+  for (const client of sseClients) {
+    client.write('event: tree-changed\ndata: {}\n\n');
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
@@ -53,6 +70,31 @@ function toOut(row: DocumentRow): Document {
 documentsRouter.get('/', (_req: Request, res: Response) => {
   const rows = stmts.listDocuments.all() as DocumentRow[];
   res.json(rows.map(toOut));
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/documents/tree-events
+// Server-Sent Events stream: emits a "tree-changed" event whenever the
+// document tree is mutated (create / update / reposition / delete / sync).
+// Clients use this to know when to reload the document list from the REST API.
+// ---------------------------------------------------------------------------
+documentsRouter.get('/tree-events', (req: Request, res: Response) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  // Disable proxy buffering so events are flushed immediately.
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders();
+
+  sseClients.add(res);
+
+  // Send a keepalive comment every 25 s to prevent proxy / browser timeouts.
+  const keepalive = setInterval(() => res.write(': keepalive\n\n'), 25_000);
+
+  req.on('close', () => {
+    clearInterval(keepalive);
+    sseClients.delete(res);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -93,6 +135,7 @@ documentsRouter.post('/', (req: Request, res: Response) => {
   };
 
   stmts.insertDocument.run(doc);
+  broadcastTreeChanged();
   res.status(201).json(toOut({ ...doc }));
 });
 
@@ -120,6 +163,7 @@ documentsRouter.put('/:id', (req: Request, res: Response) => {
   };
 
   stmts.updateDocument.run(updated);
+  broadcastTreeChanged();
   res.json(toOut({ ...updated, created_at: existing.created_at }));
 });
 
@@ -176,6 +220,7 @@ documentsRouter.patch('/:id/reposition', (req: Request, res: Response) => {
   };
 
   stmts.repositionDocument.run(updated);
+  broadcastTreeChanged();
   res.json(toOut({ ...updated, created_at: existing.created_at }));
 });
 
@@ -315,6 +360,7 @@ documentsRouter.post('/sync/structural', (req: Request, res: Response) => {
     skipped,
     documents: allRows.map(toOut),
   };
+  if (applied > 0) broadcastTreeChanged();
   res.json(result);
 });
 
@@ -361,5 +407,6 @@ documentsRouter.delete('/:id', (req: Request, res: Response) => {
   }
 
   stmts.deleteDocument.run(req.params.id);
+  broadcastTreeChanged();
   res.status(204).end();
 });

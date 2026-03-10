@@ -8,6 +8,7 @@ import {
   COMPACT_THRESHOLD,
   stmts,
 } from './db/database';
+import { broadcastTreeChanged } from './routes/documents';
 
 // ---------------------------------------------------------------------------
 // Hocuspocus server
@@ -70,6 +71,7 @@ export const hocuspocus = Server.configure({
         properties: JSON.stringify(props),
         updated_at: Date.now(),
       });
+      broadcastTreeChanged();
     }
 
     const rowCount = countYjsUpdates(documentName);
