@@ -96,7 +96,7 @@ export const hocuspocus = Server.configure({
     // Sweep stale draw.io edit locks left behind by crashed or force-closed clients.
     // Active editors refresh their lock every 60 s, so a 5-minute (300 000 ms) TTL
     // means any entry older than that is safe to remove.
-    const DRAWIO_LOCK_TTL = 5 * 60 * 1000;
+    const DRAWIO_LOCK_TTL = 2 * 60 * 1000;
     const locksMap = document.getMap('drawio-locks') as Y.Map<{ acquiredAt?: number }>;
     locksMap.forEach((val, key) => {
       if (val?.acquiredAt !== undefined && Date.now() - val.acquiredAt > DRAWIO_LOCK_TTL) {
