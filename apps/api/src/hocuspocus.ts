@@ -1,13 +1,9 @@
-import { Server, onLoadDocumentPayload, onChangePayload } from '@hocuspocus/server';
+import { Server, onLoadDocumentPayload, onChangePayload, onAuthenticatePayload, onConnectPayload, onDisconnectPayload } from '@hocuspocus/server';
 import * as Y from 'yjs';
-import {
-  appendYjsUpdate,
-  compactYjsUpdates,
-  countYjsUpdates,
-  getYjsUpdates,
-  COMPACT_THRESHOLD,
-  stmts,
-} from './db/database';
+import jwt from 'jsonwebtoken';
+import { COMPACT_THRESHOLD } from './db/database';
+import { getUserDb } from './db/userDb';
+import { JWT_SECRET } from './middleware/auth';
 import { broadcastTreeChanged } from './routes/documents';
 
 // ---------------------------------------------------------------------------
@@ -25,20 +21,34 @@ import { broadcastTreeChanged } from './routes/documents';
 export const hocuspocus = Server.configure({
   /**
    * The WebSocket server listens on this port independently of Express.
-   * Frontend connects via:  new HocuspocusProvider({ url: 'ws://localhost:1234', name: documentId })
+   * Frontend connects via:  new HocuspocusProvider({ url: 'ws://localhost:1234', name: documentId, token: jwtToken })
    */
   port: 1234,
 
   /**
    * Debounce onChange calls by 1 s (matching notefinity17's behaviour).
-   * Hocuspocus batches rapid edits and fires onChange once per quiet period.
    */
   debounce: 1000,
 
   /**
-   * Reconstruct in-memory Y.Doc from the append-only SQLite update log.
+   * Verify the JWT token sent by the client.
+   * Stores userId in context so subsequent hooks can access the right DB.
    */
-  async onLoadDocument({ document, documentName }: onLoadDocumentPayload) {
+  async onAuthenticate({ token, context }: onAuthenticatePayload) {
+    if (!token) throw new Error('Authentication required');
+    try {
+      const payload = jwt.verify(token, JWT_SECRET) as { sub: string; email: string };
+      context.userId = payload.sub;
+    } catch {
+      throw new Error('Invalid or expired token');
+    }
+  },
+
+  /**
+   * Reconstruct in-memory Y.Doc from the user's append-only SQLite update log.
+   */
+  async onLoadDocument({ document, documentName, context }: onLoadDocumentPayload) {
+    const { getYjsUpdates } = getUserDb(context.userId as string);
     const updates = getYjsUpdates(documentName);
     if (updates.length === 0) return;
 
@@ -52,50 +62,41 @@ export const hocuspocus = Server.configure({
   },
 
   /**
-   * Persist the incoming delta update to SQLite.
-   * Also sync the properties Y.Map back to the documents table (denormalized cache)
-   * so REST list/get endpoints always return up-to-date metadata without having to
-   * decode the Yjs binary state.
-   * Compact the log if the row count exceeds the threshold.
+   * Persist the incoming delta update to the user's SQLite database.
    */
-  async onChange({ document, documentName, update }: onChangePayload) {
-    appendYjsUpdate(documentName, update);
+  async onChange({ document, documentName, update, context }: onChangePayload) {
+    const userHandle = getUserDb(context.userId as string);
+    userHandle.appendYjsUpdate(documentName, update);
 
     // Write-through: extract properties Y.Map and cache in the documents row.
     const propsMap = document.getMap<unknown>('properties');
     if (propsMap.size > 0) {
       const props: Record<string, unknown> = {};
       propsMap.forEach((v, k) => { props[k] = v; });
-      stmts.updateDocumentProperties.run({
+      userHandle.stmts.updateDocumentProperties.run({
         id: documentName,
         properties: JSON.stringify(props),
         updated_at: Date.now(),
       });
-      broadcastTreeChanged();
+      broadcastTreeChanged(context.userId as string);
     }
 
-    const rowCount = countYjsUpdates(documentName);
+    const rowCount = userHandle.countYjsUpdates(documentName);
     if (rowCount >= COMPACT_THRESHOLD) {
       const snapshot = Y.encodeStateAsUpdate(document);
-      compactYjsUpdates(documentName, snapshot);
+      userHandle.compactYjsUpdates(documentName, snapshot);
       console.log(
         `[yjs] Compacted "${documentName}" (${rowCount} rows → 1 snapshot)`
       );
     }
   },
 
-  /**
-   * Log new connections (useful during development).
-   */
-  async onConnect({ documentName, socketId }) {
+  async onConnect({ documentName, socketId }: onConnectPayload) {
     console.log(`[yjs] Client ${socketId} connected to "${documentName}"`);
   },
 
-  async onDisconnect({ documentName, socketId, document }) {
+  async onDisconnect({ documentName, socketId, document }: onDisconnectPayload) {
     console.log(`[yjs] Client ${socketId} disconnected from "${documentName}"`);
-    // Sweep stale draw.io edit locks left behind by crashed or force-closed clients.
-    // Active editors refresh their lock every 60 s, so a 5-minute (300 000 ms) TTL
-    // means any entry older than that is safe to remove.
     const DRAWIO_LOCK_TTL = 2 * 60 * 1000;
     const locksMap = document.getMap('drawio-locks') as Y.Map<{ acquiredAt?: number }>;
     locksMap.forEach((val, key) => {

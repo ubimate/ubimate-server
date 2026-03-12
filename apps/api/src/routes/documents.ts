@@ -13,24 +13,34 @@ import type {
   SyncStructuralResult,
 } from '@notefinity/types';
 import { generateKeyBetween } from '@notefinity/utils';
-import { db, stmts } from '../db/database';
+import { requireAuth } from '../middleware/auth';
+
+const DATA_DIR = process.env.DATA_DIR ?? path.join(__dirname, '../../data');
 
 export const documentsRouter = Router();
 
+// All document routes require authentication.
+documentsRouter.use(requireAuth);
+
 // ---------------------------------------------------------------------------
-// SSE — tree-change notifications
+// SSE — tree-change notifications (scoped per user)
 // ---------------------------------------------------------------------------
 
-/** All currently open SSE response streams. */
-const sseClients = new Set<Response>();
+/** SSE streams keyed by userId. */
+const sseClients = new Map<string, Set<Response>>();
 
 /**
- * Broadcast a tree-changed event to every connected SSE client.
- * Fire-and-forget — called after each mutating route completes.
+ * Broadcast a tree-changed event to every SSE client belonging to `userId`.
  */
-export function broadcastTreeChanged(): void {
-  for (const client of sseClients) {
-    client.write('event: tree-changed\ndata: {}\n\n');
+export function broadcastTreeChanged(userId: string): void {
+  const clients = sseClients.get(userId);
+  if (!clients) return;
+  for (const client of clients) {
+    try {
+      client.write('event: tree-changed\ndata: {}\n\n');
+    } catch {
+      // Socket already closed; the 'close' handler will clean it up.
+    }
   }
 }
 
@@ -68,32 +78,45 @@ function toOut(row: DocumentRow): Document {
 // Returns ALL documents (tree data — client builds the hierarchy).
 // ---------------------------------------------------------------------------
 documentsRouter.get('/', (_req: Request, res: Response) => {
-  const rows = stmts.listDocuments.all() as DocumentRow[];
+  const rows = _req.userDbHandle.stmts.listDocuments.all() as DocumentRow[];
   res.json(rows.map(toOut));
 });
 
 // ---------------------------------------------------------------------------
 // GET /api/documents/tree-events
 // Server-Sent Events stream: emits a "tree-changed" event whenever the
-// document tree is mutated (create / update / reposition / delete / sync).
-// Clients use this to know when to reload the document list from the REST API.
+// document tree is mutated.
 // ---------------------------------------------------------------------------
 documentsRouter.get('/tree-events', (req: Request, res: Response) => {
+  // Disable the server-side socket timeout — SSE connections are intentionally
+  // long-lived and must not be killed by the default Node.js socket timeout.
+  req.socket?.setTimeout(0);
+
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
-  // Disable proxy buffering so events are flushed immediately.
   res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders();
 
-  sseClients.add(res);
+  // Initial comment forces the first TCP chunk out immediately so the browser
+  // confirms the stream is alive and doesn't report ERR_INCOMPLETE_CHUNKED_ENCODING.
+  res.write(': connected\n\n');
 
-  // Send a keepalive comment every 25 s to prevent proxy / browser timeouts.
-  const keepalive = setInterval(() => res.write(': keepalive\n\n'), 25_000);
+  const userId = req.userId;
+  if (!sseClients.has(userId)) sseClients.set(userId, new Set());
+  sseClients.get(userId)!.add(res);
+
+  const keepalive = setInterval(() => {
+    try { res.write(': keepalive\n\n'); } catch { /* socket gone */ }
+  }, 25_000);
 
   req.on('close', () => {
     clearInterval(keepalive);
-    sseClients.delete(res);
+    const set = sseClients.get(userId);
+    if (set) {
+      set.delete(res);
+      if (set.size === 0) sseClients.delete(userId);
+    }
   });
 });
 
@@ -101,7 +124,7 @@ documentsRouter.get('/tree-events', (req: Request, res: Response) => {
 // GET /api/documents/:id
 // ---------------------------------------------------------------------------
 documentsRouter.get('/:id', (req: Request, res: Response) => {
-  const row = stmts.getDocument.get(req.params.id) as DocumentRow | undefined;
+  const row = req.userDbHandle.stmts.getDocument.get(req.params.id) as DocumentRow | undefined;
   if (!row) return res.status(404).json({ error: 'Document not found' });
   res.json(toOut(row));
 });
@@ -111,6 +134,7 @@ documentsRouter.get('/:id', (req: Request, res: Response) => {
 // Body: { parent_id?, type, position?, properties? }
 // ---------------------------------------------------------------------------
 documentsRouter.post('/', (req: Request, res: Response) => {
+  const { stmts } = req.userDbHandle;
   const { parent_id = null, type, properties = {} } = req.body as CreateDocumentPayload;
 
   // Derive position: place after the last sibling, or use the client-supplied value if present.
@@ -135,7 +159,7 @@ documentsRouter.post('/', (req: Request, res: Response) => {
   };
 
   stmts.insertDocument.run(doc);
-  broadcastTreeChanged();
+  broadcastTreeChanged(req.userId);
   res.status(201).json(toOut({ ...doc }));
 });
 
@@ -145,6 +169,7 @@ documentsRouter.post('/', (req: Request, res: Response) => {
 // Partial update — only provided fields are changed.
 // ---------------------------------------------------------------------------
 documentsRouter.put('/:id', (req: Request, res: Response) => {
+  const { stmts } = req.userDbHandle;
   const existing = stmts.getDocument.get(req.params.id) as DocumentRow | undefined;
   if (!existing) return res.status(404).json({ error: 'Document not found' });
 
@@ -163,26 +188,20 @@ documentsRouter.put('/:id', (req: Request, res: Response) => {
   };
 
   stmts.updateDocument.run(updated);
-  broadcastTreeChanged();
+  broadcastTreeChanged(req.userId);
   res.json(toOut({ ...updated, created_at: existing.created_at }));
 });
 
 // ---------------------------------------------------------------------------
 // PATCH /api/documents/:id/reposition
-// Body: { parent_id: string | null, before_id: string | null, client_ts?: number }
-// Moves the document under parent_id, placing it immediately before before_id.
-// Pass before_id: null to append at the end of the sibling list.
-// If client_ts is supplied, last-write-wins semantics are applied: the operation
-// is skipped (returning the current doc state) when a newer op has already won.
 // ---------------------------------------------------------------------------
 documentsRouter.patch('/:id/reposition', (req: Request, res: Response) => {
+  const { stmts } = req.userDbHandle;
   const existing = stmts.getDocument.get(req.params.id) as DocumentRow | undefined;
   if (!existing) return res.status(404).json({ error: 'Document not found' });
 
   const { parent_id = null, before_id = null, client_ts } = req.body as RepositionDocumentPayload;
 
-  // LWW check: if caller supplied a timestamp and a newer structural op has
-  // already been applied, return current state without mutating anything.
   if (client_ts !== undefined && client_ts <= existing.last_struct_ts) {
     return res.json(toOut(existing));
   }
@@ -190,13 +209,10 @@ documentsRouter.patch('/:id/reposition', (req: Request, res: Response) => {
   let position: string;
 
   if (before_id === null) {
-    // Append after the last sibling in the target parent.
     const lastRow = stmts.lastSiblingPosition.get(parent_id) as { position: string } | undefined;
-    // Exclude the document itself when it is already in this parent.
     const lastPos = lastRow && lastRow.position !== existing.position ? lastRow.position : null;
     position = generateKeyBetween(lastPos, null);
   } else {
-    // Insert immediately before before_id.
     const beforeDoc = stmts.getDocument.get(before_id) as DocumentRow | undefined;
     if (!beforeDoc) return res.status(404).json({ error: 'before_id document not found' });
 
@@ -220,7 +236,7 @@ documentsRouter.patch('/:id/reposition', (req: Request, res: Response) => {
   };
 
   stmts.repositionDocument.run(updated);
-  broadcastTreeChanged();
+  broadcastTreeChanged(req.userId);
   res.json(toOut({ ...updated, created_at: existing.created_at }));
 });
 
@@ -237,6 +253,7 @@ documentsRouter.patch('/:id/reposition', (req: Request, res: Response) => {
 // overwrite its local state with the authoritative server state.
 // ---------------------------------------------------------------------------
 documentsRouter.post('/sync/structural', (req: Request, res: Response) => {
+  const { db, stmts } = req.userDbHandle;
   const { ops } = req.body as SyncStructuralPayload;
 
   if (!Array.isArray(ops)) {
@@ -360,21 +377,21 @@ documentsRouter.post('/sync/structural', (req: Request, res: Response) => {
     skipped,
     documents: allRows.map(toOut),
   };
-  if (applied > 0) broadcastTreeChanged();
+  if (applied > 0) broadcastTreeChanged(req.userId);
   res.json(result);
 });
 
 // ---------------------------------------------------------------------------
 // DELETE /api/documents/:id
-// Cascades to child documents and yjs_updates via FK constraint.
-// For image documents, also removes the uploaded file from disk.
 // ---------------------------------------------------------------------------
 documentsRouter.delete('/:id', (req: Request, res: Response) => {
+  const { db, stmts } = req.userDbHandle;
   const existing = stmts.getDocument.get(req.params.id) as DocumentRow | undefined;
   if (!existing) return res.status(404).json({ error: 'Document not found' });
 
-  // Gather all image-type descendants (including the root doc itself) so
-  // their uploaded files can be removed before the rows are cascade-deleted.
+  const userUploadsDir = path.join(DATA_DIR, 'uploads', req.userId);
+
+  // Gather image-type descendants to clean up uploaded files.
   const subtree = (db.prepare(`
     WITH RECURSIVE subtree(id, type, properties) AS (
       SELECT id, type, properties FROM documents WHERE id = ?
@@ -391,11 +408,9 @@ documentsRouter.delete('/:id', (req: Request, res: Response) => {
       const props = JSON.parse(row.properties) as Record<string, unknown>;
       const src = typeof props.src === 'string' ? props.src : null;
       if (!src) continue;
-      // src is an absolute URL; extract the pathname and strip /uploads/
-      const pathname = new URL(src).pathname; // e.g. /uploads/uuid.png
-      const filename = path.basename(pathname);
-      if (!filename || filename.includes('/') || filename.includes('..')) continue;
-      const filePath = path.join(process.cwd(), 'data', 'uploads', filename);
+      const filename = path.basename(new URL(src).pathname);
+      if (!filename || filename.includes('..')) continue;
+      const filePath = path.join(userUploadsDir, filename);
       fs.unlink(filePath, (err) => {
         if (err && err.code !== 'ENOENT') {
           console.error(`[uploads] Failed to delete ${filePath}:`, err.message);
@@ -407,6 +422,6 @@ documentsRouter.delete('/:id', (req: Request, res: Response) => {
   }
 
   stmts.deleteDocument.run(req.params.id);
-  broadcastTreeChanged();
+  broadcastTreeChanged(req.userId);
   res.status(204).end();
 });

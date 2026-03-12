@@ -99,3 +99,25 @@ export interface UpdateDocumentPayload {
   position?: string;
   properties?: Record<string, unknown>;
 }
+
+// ---------------------------------------------------------------------------
+// Auth
+// ---------------------------------------------------------------------------
+
+/** A registered user as returned by the API (no password fields). */
+export interface User {
+  id: string;
+  email: string;
+  created_at: number; // Unix ms
+}
+
+/** Body of POST /api/auth/register and POST /api/auth/login */
+export interface AuthPayload {
+  email: string;
+  password: string;
+}
+
+/** Response of POST /api/auth/register and POST /api/auth/login */
+export interface AuthResponse {
+  user: User;
+}

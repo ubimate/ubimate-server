@@ -1,8 +1,10 @@
 import express from 'express';
 import cors from 'cors';
+import cookieParser from 'cookie-parser';
 import path from 'path';
 import { documentsRouter } from './routes/documents';
 import { uploadsRouter } from './routes/uploads';
+import { authRouter } from './routes/auth';
 import { hocuspocus } from './hocuspocus';
 
 const NO_IMAGE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 150" width="200" height="150">
@@ -20,7 +22,6 @@ const API_PORT = Number(process.env.API_PORT) || 3001;
 // setting DATA_DIR=/data (e.g. for a CapRover persistent volume) is honoured
 // everywhere — both for writing files and for serving them.
 const DATA_DIR = process.env.DATA_DIR ?? path.join(__dirname, '../data');
-const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
 
 // ---------------------------------------------------------------------------
 // Express – REST API
@@ -51,19 +52,21 @@ app.use(cors({
 }));
 
 app.use(express.json());
+app.use(cookieParser());
 
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: Date.now() });
 });
 
+app.use('/api/auth', authRouter);
 app.use('/api/documents', documentsRouter);
 app.use('/api/uploads', uploadsRouter);
 
-// Serve uploaded files as static assets; fall through to fallback if not found.
-app.use('/uploads', express.static(UPLOADS_DIR));
+// Serve uploaded files as static assets (supports user subdirectories).
+app.use('/uploads', express.static(path.join(DATA_DIR, 'uploads')));
 
-// Fallback: return a "no image" SVG for any missing upload.
-app.get('/uploads/:filename', (_req, res) => {
+// Fallback: return a "no image" SVG for any missing upload path.
+app.get('/uploads/*path', (_req, res) => {
   res.setHeader('Content-Type', 'image/svg+xml');
   res.send(NO_IMAGE_SVG);
 });
