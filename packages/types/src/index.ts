@@ -108,10 +108,12 @@ export interface UpdateDocumentPayload {
 export interface User {
   id: string;
   email: string;
+  /** Extensible user properties (name, avatar, etc.). Will be encrypted at rest in future. */
+  properties: Record<string, unknown>;
   created_at: number; // Unix ms
 }
 
-/** Body of POST /api/auth/register and POST /api/auth/login */
+/** Body of POST /api/auth/login */
 export interface AuthPayload {
   email: string;
   password: string;

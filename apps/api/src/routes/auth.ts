@@ -3,7 +3,7 @@ import { randomUUID } from 'crypto';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import rateLimit from 'express-rate-limit';
-import { registryStmts } from '../db/registry';
+import { registryStmts, parseUserProperties } from '../db/registry';
 import type { UserRow } from '../db/registry';
 import { JWT_SECRET, JWT_EXPIRES_IN, requireAuth } from '../middleware/auth';
 import type { AuthPayload } from '@notefinity/types';
@@ -54,8 +54,12 @@ function setSessionCookie(res: Response, token: string): void {
 // POST /api/auth/register
 // ---------------------------------------------------------------------------
 authRouter.post('/register', authLimiter, async (req: Request, res: Response) => {
-  const { email, password } = req.body as AuthPayload;
+  const { email, password, name } = req.body as AuthPayload & { name?: string };
 
+  if (name !== undefined && (typeof name !== 'string' || name.trim().length > 100)) {
+    res.status(400).json({ error: 'Name must not exceed 100 characters' });
+    return;
+  }
   if (!email || typeof email !== 'string' || !email.includes('@')) {
     res.status(400).json({ error: 'Valid email is required' });
     return;
@@ -80,9 +84,11 @@ authRouter.post('/register', authLimiter, async (req: Request, res: Response) =>
   const userId = randomUUID();
   const now = Date.now();
 
+  const properties: Record<string, unknown> = name?.trim() ? { name: name.trim() } : {};
   registryStmts.createUser.run({
     id: userId,
     email: normalizedEmail,
+    properties: JSON.stringify(properties),
     password_hash: passwordHash,
     created_at: now,
   });
@@ -92,7 +98,7 @@ authRouter.post('/register', authLimiter, async (req: Request, res: Response) =>
   });
 
   setSessionCookie(res, token);
-  res.status(201).json({ user: { id: userId, email: normalizedEmail, created_at: now } });
+  res.status(201).json({ user: { id: userId, email: normalizedEmail, properties, created_at: now } });
 });
 
 // ---------------------------------------------------------------------------
@@ -123,7 +129,7 @@ authRouter.post('/login', authLimiter, async (req: Request, res: Response) => {
   });
 
   setSessionCookie(res, token);
-  res.json({ user: { id: user.id, email: user.email, created_at: user.created_at } });
+  res.json({ user: { id: user.id, email: user.email, properties: parseUserProperties(user), created_at: user.created_at } });
 });
 
 // ---------------------------------------------------------------------------
@@ -143,7 +149,7 @@ authRouter.get('/me', requireAuth, (req: Request, res: Response) => {
     res.status(401).json({ error: 'User not found' });
     return;
   }
-  res.json({ id: user.id, email: user.email, created_at: user.created_at });
+  res.json({ id: user.id, email: user.email, properties: parseUserProperties(user), created_at: user.created_at });
 });
 
 // ---------------------------------------------------------------------------
