@@ -20,12 +20,16 @@ registryDb.exec(`
     email         TEXT    NOT NULL UNIQUE,
     properties    TEXT    NOT NULL DEFAULT '{}',
     password_hash TEXT    NOT NULL,
-    created_at    INTEGER NOT NULL
+    created_at    INTEGER NOT NULL,
+    status        TEXT    NOT NULL DEFAULT 'active'
   );
 `);
 
 // Migrations for existing databases.
 const cols = (registryDb.pragma('table_info(users)') as { name: string }[]).map(c => c.name);
+if (!cols.includes('status')) {
+  registryDb.exec(`ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`);
+}
 if (!cols.includes('properties')) {
   registryDb.exec(`ALTER TABLE users ADD COLUMN properties TEXT NOT NULL DEFAULT '{}'`);
   // Migrate existing name values (from the previous schema) into the properties JSON.
@@ -45,6 +49,7 @@ export interface UserRow {
   properties: string;
   password_hash: string;
   created_at: number;
+  status: string;
 }
 
 /** Safely parse the properties JSON column. Returns an empty object on malformed data. */
@@ -58,8 +63,8 @@ export function parseUserProperties(row: UserRow): Record<string, unknown> {
 
 export const registryStmts = {
   createUser: registryDb.prepare(`
-    INSERT INTO users (id, email, properties, password_hash, created_at)
-    VALUES (@id, @email, @properties, @password_hash, @created_at)
+    INSERT INTO users (id, email, properties, password_hash, created_at, status)
+    VALUES (@id, @email, @properties, @password_hash, @created_at, @status)
   `),
   getUserByEmail: registryDb.prepare(`SELECT * FROM users WHERE email = ?`),
   getUserById: registryDb.prepare(`SELECT * FROM users WHERE id = ?`),

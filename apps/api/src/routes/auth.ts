@@ -91,6 +91,7 @@ authRouter.post('/register', authLimiter, async (req: Request, res: Response) =>
     properties: JSON.stringify(properties),
     password_hash: passwordHash,
     created_at: now,
+    status: 'active',
   });
 
   const token = jwt.sign({ sub: userId, email: normalizedEmail }, JWT_SECRET, {
@@ -121,6 +122,11 @@ authRouter.post('/login', authLimiter, async (req: Request, res: Response) => {
 
   if (!user || !valid) {
     res.status(401).json({ error: 'Invalid email or password' });
+    return;
+  }
+
+  if (user.status !== 'active') {
+    res.status(403).json({ error: 'Account is not active' });
     return;
   }
 
