@@ -5,6 +5,7 @@ import path from 'path';
 import { documentsRouter } from './routes/documents';
 import { uploadsRouter } from './routes/uploads';
 import { authRouter } from './routes/auth';
+import { unfurlRouter } from './routes/unfurl';
 import { hocuspocus } from './hocuspocus';
 
 const NO_IMAGE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 150" width="200" height="150">
@@ -61,6 +62,7 @@ app.get('/api/health', (_req, res) => {
 app.use('/api/auth', authRouter);
 app.use('/api/documents', documentsRouter);
 app.use('/api/uploads', uploadsRouter);
+app.use('/api/unfurl', unfurlRouter);
 
 // Serve uploaded files as static assets (supports user subdirectories).
 app.use('/uploads', express.static(path.join(DATA_DIR, 'uploads')));
