@@ -7,6 +7,11 @@ import { requireAuth } from '../middleware/auth';
 
 const DATA_DIR = process.env.DATA_DIR ?? path.join(__dirname, '../../data');
 const MAX_SIZE_BYTES = (Number(process.env.UPLOAD_MAX_SIZE_MB) || 10) * 1024 * 1024;
+// Videos are allowed a larger limit, defaulting to 50 MB.
+const MAX_VIDEO_SIZE_BYTES = (Number(process.env.MAX_VIDEO_UPLOAD_MB) || 50) * 1024 * 1024;
+// Multer enforces the stream-level cap at the higher of the two limits;
+// we do a post-upload MIME check to apply the lower general limit to non-video files.
+const MULTER_MAX_BYTES = Math.max(MAX_SIZE_BYTES, MAX_VIDEO_SIZE_BYTES);
 
 export const uploadsRouter = Router();
 
@@ -35,7 +40,7 @@ uploadsRouter.post('/', (req: Request, res: Response) => {
 
   const upload = multer({
     storage,
-    limits: { fileSize: MAX_SIZE_BYTES },
+    limits: { fileSize: MULTER_MAX_BYTES },
   }).single('file');
 
   upload(req, res, (err) => {
@@ -47,6 +52,17 @@ uploadsRouter.post('/', (req: Request, res: Response) => {
       res.status(400).json({ error: 'No file provided' });
       return;
     }
+
+    // Post-upload size check: apply the lower general limit to non-video files.
+    const isVideo = req.file.mimetype.startsWith('video/');
+    const effectiveLimit = isVideo ? MAX_VIDEO_SIZE_BYTES : MAX_SIZE_BYTES;
+    if (req.file.size > effectiveLimit) {
+      fs.unlinkSync(req.file.path);
+      const limitMb = Math.round(effectiveLimit / (1024 * 1024));
+      res.status(400).json({ error: `File too large. Maximum size is ${limitMb} MB.` });
+      return;
+    }
+
     const url = `/uploads/${req.userId}/${req.file.filename}`;
     res.status(201).json({ url });
   });
