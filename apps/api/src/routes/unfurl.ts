@@ -101,6 +101,8 @@ interface OgData {
 function parseOgData(html: string, baseUrl: string): OgData {
   const title =
     decodeHtmlEntities(metaContent(html, 'og:title')) ||
+    decodeHtmlEntities(metaContent(html, 'twitter:title')) ||
+    decodeHtmlEntities(metaContent(html, 'title')) ||
     decodeHtmlEntities(/<title[^>]*>([^<]*)<\/title>/i.exec(html)?.[1]?.trim() ?? '');
 
   const description =
@@ -158,7 +160,7 @@ unfurlRouter.get('/', async (req: Request, res: Response) => {
     const response = await fetch(parsed.href, {
       signal: controller.signal,
       headers: {
-        'User-Agent': 'Notefinity/1.0 (link preview; +https://notefinity.app)',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
         Accept: 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.5',
       },
