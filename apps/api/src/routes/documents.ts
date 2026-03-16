@@ -142,7 +142,7 @@ documentsRouter.post('/', (req: Request, res: Response) => {
   const position = (req.body as CreateDocumentPayload).position
     ?? generateKeyBetween(lastRow?.position ?? null, null);
 
-  if (!type || !['page', 'folder', 'workspace', 'image'].includes(type)) {
+  if (!type || !['page', 'folder', 'workspace', 'image', 'file'].includes(type)) {
     return res.status(400).json({ error: 'Invalid or missing `type`' });
   }
 
@@ -391,7 +391,7 @@ documentsRouter.delete('/:id', (req: Request, res: Response) => {
 
   const userUploadsDir = path.join(DATA_DIR, 'uploads', req.userId);
 
-  // Gather image-type descendants to clean up uploaded files.
+  // Gather image/file-type descendants to clean up uploaded files.
   const subtree = (db.prepare(`
     WITH RECURSIVE subtree(id, type, properties) AS (
       SELECT id, type, properties FROM documents WHERE id = ?
@@ -400,7 +400,7 @@ documentsRouter.delete('/:id', (req: Request, res: Response) => {
       FROM documents d
       JOIN subtree s ON d.parent_id = s.id
     )
-    SELECT type, properties FROM subtree WHERE type = 'image'
+    SELECT type, properties FROM subtree WHERE type IN ('image', 'file')
   `).all(req.params.id) as Array<{ type: string; properties: string }>);
 
   for (const row of subtree) {

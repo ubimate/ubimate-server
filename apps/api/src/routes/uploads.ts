@@ -8,14 +8,6 @@ import { requireAuth } from '../middleware/auth';
 const DATA_DIR = process.env.DATA_DIR ?? path.join(__dirname, '../../data');
 const MAX_SIZE_BYTES = (Number(process.env.UPLOAD_MAX_SIZE_MB) || 10) * 1024 * 1024;
 
-const ALLOWED_MIME_TYPES = new Set([
-  'image/jpeg',
-  'image/png',
-  'image/gif',
-  'image/webp',
-  'image/svg+xml',
-]);
-
 export const uploadsRouter = Router();
 
 // All upload routes require authentication.
@@ -26,6 +18,7 @@ uploadsRouter.use(requireAuth);
  * Accepts multipart/form-data with a single `file` field.
  * Files are stored under DATA_DIR/uploads/<userId>/.
  * Returns { url: '/uploads/<userId>/<uuid>.<ext>' }
+ * Accepts all MIME types (images and arbitrary file attachments).
  */
 uploadsRouter.post('/', (req: Request, res: Response) => {
   // Lazily create the user's upload directory on first upload.
@@ -43,13 +36,6 @@ uploadsRouter.post('/', (req: Request, res: Response) => {
   const upload = multer({
     storage,
     limits: { fileSize: MAX_SIZE_BYTES },
-    fileFilter: (_r, file, cb) => {
-      if (ALLOWED_MIME_TYPES.has(file.mimetype)) {
-        cb(null, true);
-      } else {
-        cb(new Error(`Unsupported file type: ${file.mimetype}`));
-      }
-    },
   }).single('file');
 
   upload(req, res, (err) => {
