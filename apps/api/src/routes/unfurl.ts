@@ -123,6 +123,58 @@ function parseOgData(html: string, baseUrl: string): OgData {
   return { title, description, image, favicon };
 }
 
+// ── oEmbed providers ─────────────────────────────────────────────────────────
+
+/**
+ * Hostname suffix → oEmbed endpoint.
+ * These sites block or mangle OG scraping; their oEmbed APIs return reliable metadata.
+ * Add new entries here to extend the whitelist (no other code changes needed).
+ */
+const OEMBED_PROVIDERS: Record<string, string> = {
+  'youtube.com': 'https://www.youtube.com/oembed',
+  'youtu.be':    'https://www.youtube.com/oembed',
+  'vimeo.com':   'https://vimeo.com/api/oembed.json',
+};
+
+function getOembedEndpoint(hostname: string): string | null {
+  const h = hostname.replace(/^www\./, '');
+  for (const [suffix, endpoint] of Object.entries(OEMBED_PROVIDERS)) {
+    if (h === suffix || h.endsWith(`.${suffix}`)) return endpoint;
+  }
+  return null;
+}
+
+interface OembedResponse {
+  title?: string;
+  thumbnail_url?: string;
+  provider_url?: string;
+  author_name?: string;
+}
+
+async function fetchOembed(url: string, endpoint: string, signal: AbortSignal): Promise<OgData | null> {
+  try {
+    const oembedUrl = `${endpoint}?url=${encodeURIComponent(url)}&format=json`;
+    const r = await fetch(oembedUrl, { signal });
+    if (!r.ok) return null;
+    const data = (await r.json()) as OembedResponse;
+    if (!data.title) return null;
+
+    let favicon = '';
+    try {
+      favicon = data.provider_url ? `${new URL(data.provider_url).origin}/favicon.ico` : '';
+    } catch { /* ignore bad provider_url */ }
+
+    return {
+      title: data.title,
+      description: data.author_name ? `by ${data.author_name}` : '',
+      image: data.thumbnail_url ?? '',
+      favicon,
+    };
+  } catch {
+    return null;
+  }
+}
+
 // ── Route ────────────────────────────────────────────────────────────────────
 
 const MAX_BODY_BYTES = 512 * 1024; // 512 KB
@@ -151,6 +203,23 @@ unfurlRouter.get('/', async (req: Request, res: Response) => {
   if (await isSsrfRisk(parsed.hostname)) {
     res.status(400).json({ error: 'URL not allowed' });
     return;
+  }
+
+  // Try oEmbed first for whitelisted providers — more reliable than OG scraping.
+  const oembedEndpoint = getOembedEndpoint(parsed.hostname);
+  if (oembedEndpoint) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    try {
+      const og = await fetchOembed(parsed.href, oembedEndpoint, controller.signal);
+      if (og) {
+        res.json({ ...og, url: raw });
+        return;
+      }
+    } finally {
+      clearTimeout(timeout);
+    }
+    // Fall through to HTML scraping if oEmbed call failed or returned nothing.
   }
 
   try {
