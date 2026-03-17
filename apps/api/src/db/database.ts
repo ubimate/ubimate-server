@@ -47,6 +47,14 @@ const SCHEMA_SQL = `
     id             TEXT    PRIMARY KEY,
     parent_id      TEXT    REFERENCES documents(id) ON DELETE CASCADE,
     type           TEXT    NOT NULL CHECK(type IN ('page', 'folder', 'db-folder', 'workspace', 'image', 'file')),
+    position       TEXT    NOT NULL DEFAULT 'a0',
+    properties     TEXT    NOT NULL DEFAULT '{}',
+    created_at     INTEGER NOT NULL,
+    updated_at     INTEGER NOT NULL,
+    last_struct_ts INTEGER NOT NULL DEFAULT 0
+  );
+
+  CREATE TABLE IF NOT EXISTS yjs_updates (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     document_id TEXT    NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
     data        BLOB    NOT NULL,
@@ -113,31 +121,6 @@ const MIGRATIONS: Migration[] = [
           id             TEXT    PRIMARY KEY,
           parent_id      TEXT    REFERENCES documents_new(id) ON DELETE CASCADE,
           type           TEXT    NOT NULL CHECK(type IN ('page', 'folder', 'workspace', 'image', 'file')),
-          position       TEXT    NOT NULL DEFAULT 'a0',
-          properties     TEXT    NOT NULL DEFAULT '{}',
-          created_at     INTEGER NOT NULL,
-          updated_at     INTEGER NOT NULL,
-          last_struct_ts INTEGER NOT NULL DEFAULT 0
-        );
-        INSERT INTO documents_new SELECT * FROM documents;
-        DROP TABLE documents;
-        ALTER TABLE documents_new RENAME TO documents;
-        CREATE INDEX IF NOT EXISTS idx_documents_parent_id ON documents(parent_id);
-        CREATE INDEX IF NOT EXISTS idx_documents_type      ON documents(type);
-      `);
-      db.pragma('foreign_keys = ON');
-    },
-  },
-  {
-    // Expand the type CHECK constraint to include the 'db-folder' datatable folder type.
-    version: 4,
-    run: (db) => {
-      db.pragma('foreign_keys = OFF');
-      db.exec(`
-        CREATE TABLE documents_new (
-          id             TEXT    PRIMARY KEY,
-          parent_id      TEXT    REFERENCES documents_new(id) ON DELETE CASCADE,
-          type           TEXT    NOT NULL CHECK(type IN ('page', 'folder', 'db-folder', 'workspace', 'image', 'file')),
           position       TEXT    NOT NULL DEFAULT 'a0',
           properties     TEXT    NOT NULL DEFAULT '{}',
           created_at     INTEGER NOT NULL,
