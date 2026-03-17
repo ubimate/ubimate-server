@@ -142,7 +142,7 @@ documentsRouter.post('/', (req: Request, res: Response) => {
   const position = (req.body as CreateDocumentPayload).position
     ?? generateKeyBetween(lastRow?.position ?? null, null);
 
-  if (!type || !['page', 'folder', 'workspace', 'image', 'file'].includes(type)) {
+  if (!type || !['page', 'folder', 'db-folder', 'workspace', 'image', 'file'].includes(type)) {
     return res.status(400).json({ error: 'Invalid or missing `type`' });
   }
 
@@ -279,7 +279,7 @@ documentsRouter.post('/sync/structural', (req: Request, res: Response) => {
         if (existing) { skipped++; continue; }
 
         const payload = op.payload as CreateDocumentPayload;
-        if (!payload.type || !['page', 'folder', 'workspace'].includes(payload.type)) {
+        if (!payload.type || !['page', 'folder', 'db-folder', 'workspace'].includes(payload.type)) {
           skipped++; continue;
         }
         const lastRow = stmts.lastSiblingPosition.get(payload.parent_id ?? null) as
