@@ -1,12 +1,13 @@
 import { Server, onLoadDocumentPayload, onChangePayload, onAuthenticatePayload, onConnectPayload, onDisconnectPayload } from '@hocuspocus/server';
 import * as Y from 'yjs';
 import jwt from 'jsonwebtoken';
+import type { BlockRegistryEntry } from '@notefinity/types';
 import { COMPACT_THRESHOLD } from './db/database';
 import { getUserDb } from './db/userDb';
 import { JWT_SECRET } from './middleware/auth';
 import { broadcastTreeChanged } from './routes/documents';
 import { isBlockRegistryDoc, blockRegistryDocName, getBlockRegistryMaps, registerBlock, unregisterBlock } from './blockRegistry';
-import { extractDatatableBlocks } from './pageParser';
+import { extractDatatableBlocks, rebuildPageProjections } from './pageParser';
 
 // ---------------------------------------------------------------------------
 // Hocuspocus server
@@ -101,8 +102,20 @@ export const hocuspocus = Server.configure({
               const { blocks } = getBlockRegistryMaps(registryDoc);
 
               // Upsert every datatable found in this page.
+              // Preserve the existing projection (rebuilt below) and merge
+              // relations — the YAML-parsed relations take precedence but we
+              // fall back to existing registry relations when the page has none
+              // declared yet (e.g. page was saved before the relation UI existed).
               for (const [blockId, entry] of pageBlocks) {
-                registerBlock(blocks, blockId, entry);
+                const existing = blocks.get(blockId);
+                const mergedEntry: BlockRegistryEntry = {
+                  ...entry,
+                  relations: entry.relations.length > 0
+                    ? entry.relations
+                    : (existing?.relations ?? []),
+                  projection: existing?.projection,
+                };
+                registerBlock(blocks, blockId, mergedEntry);
               }
 
               // Remove registry entries for datatables that were deleted from
@@ -117,6 +130,10 @@ export const hocuspocus = Server.configure({
               for (const blockId of toRemove) {
                 unregisterBlock(blocks, blockId);
               }
+
+              // Rebuild projections for any block on this page that is
+              // referenced as a target by consumers in the registry.
+              rebuildPageProjections(document, documentName, blocks);
             });
           } finally {
             await conn.disconnect();
