@@ -169,3 +169,64 @@ describe('appendYjsUpdate', () => {
     expect(row.type).toBe('folder');
   });
 });
+
+// ---------------------------------------------------------------------------
+// findWorkspaceId — parent-chain traversal
+// ---------------------------------------------------------------------------
+
+describe('findWorkspaceId', () => {
+  let tmpDir: string;
+  let handle: UserDbHandle;
+
+  beforeEach(() => {
+    ({ handle, tmpDir } = makeTmpDb());
+    // Build a three-level tree: workspace → folder → page
+    handle.db
+      .prepare(
+        `INSERT INTO documents (id, parent_id, type, position, properties, created_at, updated_at)
+         VALUES
+           ('ws-1',     NULL,     'workspace', 'a0', '{}', 1000, 1000),
+           ('fold-1',   'ws-1',   'folder',    'a0', '{}', 1000, 1000),
+           ('page-1',   'fold-1', 'page',      'a0', '{}', 1000, 1000),
+           ('page-2',   'ws-1',   'page',      'b0', '{}', 1000, 1000),
+           ('ws-2',     NULL,     'workspace', 'a0', '{}', 1000, 1000),
+           ('page-3',   'ws-2',   'page',      'a0', '{}', 1000, 1000)`,
+      )
+      .run();
+  });
+
+  afterEach(() => {
+    handle.db.close();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('returns the workspace id for a page directly under the workspace', () => {
+    expect(handle.findWorkspaceId('page-2')).toBe('ws-1');
+  });
+
+  it('returns the workspace id for a page nested under a folder', () => {
+    expect(handle.findWorkspaceId('page-1')).toBe('ws-1');
+  });
+
+  it('returns the correct workspace when multiple workspaces exist', () => {
+    expect(handle.findWorkspaceId('page-3')).toBe('ws-2');
+  });
+
+  it('returns the workspace id when called with the workspace id itself', () => {
+    expect(handle.findWorkspaceId('ws-1')).toBe('ws-1');
+  });
+
+  it('returns null for a document that does not exist', () => {
+    expect(handle.findWorkspaceId('nonexistent')).toBeNull();
+  });
+
+  it('returns null for a detached document with no workspace ancestor', () => {
+    handle.db
+      .prepare(
+        `INSERT INTO documents (id, parent_id, type, position, properties, created_at, updated_at)
+         VALUES ('detached', NULL, 'page', 'a0', '{}', 1000, 1000)`,
+      )
+      .run();
+    expect(handle.findWorkspaceId('detached')).toBeNull();
+  });
+});

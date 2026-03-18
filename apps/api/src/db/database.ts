@@ -37,6 +37,11 @@ export interface UserDbHandle {
   appendYjsUpdate(documentId: string, update: Uint8Array): void;
   compactYjsUpdates(documentId: string, snapshot: Uint8Array): void;
   countYjsUpdates(documentId: string): number;
+  /**
+   * Traverse the parent chain for `documentId` and return the ID of the
+   * nearest ancestor whose `type = 'workspace'`, or null if not found.
+   */
+  findWorkspaceId(documentId: string): string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -362,5 +367,19 @@ export function initUserDb(dbPath: string): UserDbHandle {
     return row.count;
   }
 
-  return { db, stmts, getYjsUpdates, appendYjsUpdate, compactYjsUpdates, countYjsUpdates };
+  function findWorkspaceId(documentId: string): string | null {
+    let id: string | null = documentId;
+    // Traverse up the parent chain (max 50 levels to guard against cycles).
+    for (let depth = 0; depth < 50 && id !== null; depth++) {
+      const row = stmts.getDocument.get(id) as
+        | { id: string; parent_id: string | null; type: string }
+        | undefined;
+      if (!row) return null;
+      if (row.type === 'workspace') return row.id;
+      id = row.parent_id;
+    }
+    return null;
+  }
+
+  return { db, stmts, getYjsUpdates, appendYjsUpdate, compactYjsUpdates, countYjsUpdates, findWorkspaceId };
 }

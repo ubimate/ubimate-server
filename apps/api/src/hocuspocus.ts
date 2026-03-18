@@ -5,7 +5,8 @@ import { COMPACT_THRESHOLD } from './db/database';
 import { getUserDb } from './db/userDb';
 import { JWT_SECRET } from './middleware/auth';
 import { broadcastTreeChanged } from './routes/documents';
-import { isBlockRegistryDoc } from './blockRegistry';
+import { isBlockRegistryDoc, blockRegistryDocName, getBlockRegistryMaps, registerBlock, unregisterBlock } from './blockRegistry';
+import { extractDatatableBlocks } from './pageParser';
 
 // ---------------------------------------------------------------------------
 // Hocuspocus server
@@ -83,6 +84,49 @@ export const hocuspocus = Server.configure({
           updated_at: Date.now(),
         });
         broadcastTreeChanged(context.userId as string);
+      }
+
+      // Block-registry update: scan the page for datatable blocks and keep the
+      // workspace-wide registry in sync.
+      const workspaceId = userHandle.findWorkspaceId(documentName);
+      if (workspaceId) {
+        const pageBlocks = extractDatatableBlocks(document, documentName);
+        const registryName = blockRegistryDocName(workspaceId);
+        try {
+          const conn = await hocuspocus.openDirectConnection(registryName, {
+            userId: context.userId,
+          });
+          try {
+            await conn.transact((registryDoc) => {
+              const { blocks } = getBlockRegistryMaps(registryDoc);
+
+              // Upsert every datatable found in this page.
+              for (const [blockId, entry] of pageBlocks) {
+                registerBlock(blocks, blockId, entry);
+              }
+
+              // Remove registry entries for datatables that were deleted from
+              // this page (present in registry with this documentId but no
+              // longer in the page scan).
+              const toRemove: string[] = [];
+              blocks.forEach((entry, blockId) => {
+                if (entry.documentId === documentName && !pageBlocks.has(blockId)) {
+                  toRemove.push(blockId);
+                }
+              });
+              for (const blockId of toRemove) {
+                unregisterBlock(blocks, blockId);
+              }
+            });
+          } finally {
+            await conn.disconnect();
+          }
+        } catch (err) {
+          console.error(
+            `[registry] Failed to update block registry for page "${documentName}":`,
+            err,
+          );
+        }
       }
     }
 
