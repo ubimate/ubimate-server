@@ -5,6 +5,7 @@ import { COMPACT_THRESHOLD } from './db/database';
 import { getUserDb } from './db/userDb';
 import { JWT_SECRET } from './middleware/auth';
 import { broadcastTreeChanged } from './routes/documents';
+import { isBlockRegistryDoc } from './blockRegistry';
 
 // ---------------------------------------------------------------------------
 // Hocuspocus server
@@ -68,17 +69,21 @@ export const hocuspocus = Server.configure({
     const userHandle = getUserDb(context.userId as string);
     userHandle.appendYjsUpdate(documentName, update);
 
-    // Write-through: extract properties Y.Map and cache in the documents row.
-    const propsMap = document.getMap<unknown>('properties');
-    if (propsMap.size > 0) {
-      const props: Record<string, unknown> = {};
-      propsMap.forEach((v, k) => { props[k] = v; });
-      userHandle.stmts.updateDocumentProperties.run({
-        id: documentName,
-        properties: JSON.stringify(props),
-        updated_at: Date.now(),
-      });
-      broadcastTreeChanged(context.userId as string);
+    // Block-registry documents store Yjs state only — they have no properties
+    // column to sync back and do not affect the page tree broadcast.
+    if (!isBlockRegistryDoc(documentName)) {
+      // Write-through: extract properties Y.Map and cache in the documents row.
+      const propsMap = document.getMap<unknown>('properties');
+      if (propsMap.size > 0) {
+        const props: Record<string, unknown> = {};
+        propsMap.forEach((v, k) => { props[k] = v; });
+        userHandle.stmts.updateDocumentProperties.run({
+          id: documentName,
+          properties: JSON.stringify(props),
+          updated_at: Date.now(),
+        });
+        broadcastTreeChanged(context.userId as string);
+      }
     }
 
     const rowCount = userHandle.countYjsUpdates(documentName);

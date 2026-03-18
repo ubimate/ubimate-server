@@ -3,7 +3,7 @@
 // This is the single source of truth for the Notefinity data model.
 // ---------------------------------------------------------------------------
 
-export type DocumentType = 'page' | 'folder' | 'db-folder' | 'workspace' | 'image' | 'file';
+export type DocumentType = 'page' | 'folder' | 'db-folder' | 'workspace' | 'image' | 'file' | 'block-registry';
 
 /**
  * A document as returned by the REST API (properties already parsed from JSON).
@@ -112,6 +112,61 @@ export interface User {
   properties: Record<string, unknown>;
   created_at: number; // Unix ms
 }
+
+// ---------------------------------------------------------------------------
+// Block Registry — workspace-wide block metadata (Yjs-backed, always open)
+// ---------------------------------------------------------------------------
+
+/**
+ * One entry per labelled block instance in the workspace.
+ * Stored in the block-registry Y.Doc under the `blocks` Y.Map (key = blockId).
+ */
+export interface BlockRegistryEntry {
+  /** ID of the page document that contains this block. */
+  documentId: string;
+  /** Human-readable label (e.g. YAML `label`, tag name). */
+  label: string;
+  /** Block type discriminator, e.g. "datatable" | "smart-tag" | "chart". */
+  type: string;
+  /** Smart-tag instance value (omitted for non-tag blocks). */
+  value?: string;
+  /** Datatable relation targets (omitted for non-datatable blocks). */
+  relations?: Array<{
+    column: string;
+    targetBlockId: string;
+    /** Columns of the target datatable this block needs for relation chips / row-picker. */
+    projectedColumns: string[];
+  }>;
+  /**
+   * Datatable row projection for relation resolution.
+   * Owned by the TARGET block; its `columns` is the union of all consumers'
+   * `projectedColumns` declarations.
+   */
+  projection?: {
+    /** Union of all consumers' declared column needs. */
+    columns: string[];
+    /** rowId → { columnName → value } restricted to `columns`. */
+    rows: Record<string, Record<string, string>>;
+  };
+  /** Unix ms timestamp at last write. */
+  updatedAt: number;
+}
+
+/**
+ * Workspace-level schema for a smart tag.
+ * Stored in the block-registry Y.Doc under the `tagDefs` Y.Map (key = tag name).
+ */
+export interface TagDefinition {
+  valueType: 'string' | 'number' | 'date' | 'boolean' | 'select';
+  /** Valid options — only present when `valueType` is "select". */
+  options?: string[];
+  /** Unix ms timestamp at last write. */
+  updatedAt: number;
+}
+
+// ---------------------------------------------------------------------------
+// Auth
+// ---------------------------------------------------------------------------
 
 /** Body of POST /api/auth/login */
 export interface AuthPayload {

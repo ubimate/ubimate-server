@@ -25,6 +25,7 @@ export interface UserStmts {
   getYjsUpdates: Statement;
   countYjsUpdates: Statement;
   ensureDocument: Statement;
+  ensureBlockRegistryDocument: Statement;
   appendYjsUpdate: Statement;
   compactYjsUpdates: Statement;
 }
@@ -161,6 +162,32 @@ const MIGRATIONS: Migration[] = [
       db.pragma('foreign_keys = ON');
     },
   },
+  {
+    // Expand the type CHECK constraint to include 'block-registry' for the
+    // workspace-wide block metadata Yjs document (one per workspace).
+    version: 5,
+    run: (db) => {
+      db.pragma('foreign_keys = OFF');
+      db.exec(`
+        CREATE TABLE documents_new (
+          id             TEXT    PRIMARY KEY,
+          parent_id      TEXT    REFERENCES documents_new(id) ON DELETE CASCADE,
+          type           TEXT    NOT NULL CHECK(type IN ('page', 'folder', 'db-folder', 'workspace', 'image', 'file', 'block-registry')),
+          position       TEXT    NOT NULL DEFAULT 'a0',
+          properties     TEXT    NOT NULL DEFAULT '{}',
+          created_at     INTEGER NOT NULL,
+          updated_at     INTEGER NOT NULL,
+          last_struct_ts INTEGER NOT NULL DEFAULT 0
+        );
+        INSERT INTO documents_new SELECT * FROM documents;
+        DROP TABLE documents;
+        ALTER TABLE documents_new RENAME TO documents;
+        CREATE INDEX IF NOT EXISTS idx_documents_parent_id ON documents(parent_id);
+        CREATE INDEX IF NOT EXISTS idx_documents_type      ON documents(type);
+      `);
+      db.pragma('foreign_keys = ON');
+    },
+  },
 ];
 
 function runMigrations(db: Database.Database): void {
@@ -216,6 +243,7 @@ export function initUserDb(dbPath: string): UserDbHandle {
     listDocuments: db.prepare(`
       SELECT id, parent_id, type, position, properties, created_at, updated_at, last_struct_ts
       FROM documents
+      WHERE type != 'block-registry'
       ORDER BY position ASC
     `),
     getDocument: db.prepare(`
@@ -285,6 +313,10 @@ export function initUserDb(dbPath: string): UserDbHandle {
       INSERT OR IGNORE INTO documents (id, type, position, properties, created_at, updated_at)
       VALUES (@id, 'page', '0', '{}', @ts, @ts)
     `),
+    ensureBlockRegistryDocument: db.prepare(`
+      INSERT OR IGNORE INTO documents (id, type, position, properties, created_at, updated_at)
+      VALUES (@id, 'block-registry', '0', '{}', @ts, @ts)
+    `),
     appendYjsUpdate: db.prepare(`
       INSERT INTO yjs_updates (document_id, data, created_at)
       VALUES (@document_id, @data, @created_at)
@@ -304,7 +336,12 @@ export function initUserDb(dbPath: string): UserDbHandle {
     db.transaction(() => {
       // Ensure the document row exists — guards against the race where Hocuspocus
       // fires onChange before the REST API has committed the create call.
-      stmts.ensureDocument.run({ id: documentId, ts: now });
+      // Block-registry documents use their own type; all others default to 'page'.
+      if (documentId.startsWith('block-registry:')) {
+        stmts.ensureBlockRegistryDocument.run({ id: documentId, ts: now });
+      } else {
+        stmts.ensureDocument.run({ id: documentId, ts: now });
+      }
       stmts.appendYjsUpdate.run({ document_id: documentId, data: Buffer.from(update), created_at: now });
     })();
   }
