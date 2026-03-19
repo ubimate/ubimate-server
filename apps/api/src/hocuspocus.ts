@@ -1,13 +1,15 @@
 import { Server, onLoadDocumentPayload, onChangePayload, onAuthenticatePayload, onConnectPayload, onDisconnectPayload } from '@hocuspocus/server';
 import * as Y from 'yjs';
 import jwt from 'jsonwebtoken';
-import type { BlockRegistryEntry } from '@notefinity/types';
 import { COMPACT_THRESHOLD } from './db/database';
 import { getUserDb } from './db/userDb';
 import { JWT_SECRET } from './middleware/auth';
 import { broadcastTreeChanged } from './routes/documents';
-import { isBlockRegistryDoc, blockRegistryDocName, getBlockRegistryMaps, registerBlock, unregisterBlock } from './blockRegistry';
-import { extractDatatableBlocks, rebuildPageProjections } from './pageParser';
+
+/** Returns true when documentName is a block-registry document. */
+function isBlockRegistryDoc(documentName: string): boolean {
+  return documentName.startsWith('block-registry:');
+}
 
 // ---------------------------------------------------------------------------
 // Hocuspocus server
@@ -73,6 +75,8 @@ export const hocuspocus = Server.configure({
 
     // Block-registry documents store Yjs state only — they have no properties
     // column to sync back and do not affect the page tree broadcast.
+    // Block content is never inspected server-side (zero-knowledge encryption
+    // compatibility): all block-registry writes are handled by the client.
     if (!isBlockRegistryDoc(documentName)) {
       // Write-through: extract properties Y.Map and cache in the documents row.
       const propsMap = document.getMap<unknown>('properties');
@@ -85,65 +89,6 @@ export const hocuspocus = Server.configure({
           updated_at: Date.now(),
         });
         broadcastTreeChanged(context.userId as string);
-      }
-
-      // Block-registry update: scan the page for datatable blocks and keep the
-      // workspace-wide registry in sync.
-      const workspaceId = userHandle.findWorkspaceId(documentName);
-      if (workspaceId) {
-        const pageBlocks = extractDatatableBlocks(document, documentName);
-        const registryName = blockRegistryDocName(workspaceId);
-        try {
-          const conn = await hocuspocus.openDirectConnection(registryName, {
-            userId: context.userId,
-          });
-          try {
-            await conn.transact((registryDoc) => {
-              const { blocks } = getBlockRegistryMaps(registryDoc);
-
-              // Upsert every datatable found in this page.
-              // Preserve the existing projection (rebuilt below) and merge
-              // relations — the YAML-parsed relations take precedence but we
-              // fall back to existing registry relations when the page has none
-              // declared yet (e.g. page was saved before the relation UI existed).
-              for (const [blockId, entry] of pageBlocks) {
-                const existing = blocks.get(blockId);
-                const mergedEntry: BlockRegistryEntry = {
-                  ...entry,
-                  relations: entry.relations.length > 0
-                    ? entry.relations
-                    : (existing?.relations ?? []),
-                  projection: existing?.projection,
-                };
-                registerBlock(blocks, blockId, mergedEntry);
-              }
-
-              // Remove registry entries for datatables that were deleted from
-              // this page (present in registry with this documentId but no
-              // longer in the page scan).
-              const toRemove: string[] = [];
-              blocks.forEach((entry, blockId) => {
-                if (entry.documentId === documentName && !pageBlocks.has(blockId)) {
-                  toRemove.push(blockId);
-                }
-              });
-              for (const blockId of toRemove) {
-                unregisterBlock(blocks, blockId);
-              }
-
-              // Rebuild projections for any block on this page that is
-              // referenced as a target by consumers in the registry.
-              rebuildPageProjections(document, documentName, blocks);
-            });
-          } finally {
-            await conn.disconnect();
-          }
-        } catch (err) {
-          console.error(
-            `[registry] Failed to update block registry for page "${documentName}":`,
-            err,
-          );
-        }
       }
     }
 
