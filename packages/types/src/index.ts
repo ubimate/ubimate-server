@@ -130,6 +130,8 @@ export interface BlockRegistryEntry {
   type: string;
   /** Smart-tag instance value (omitted for non-tag blocks). */
   value?: string;
+  /** Datatable column names (schema), published so other datatables can build pickers. */
+  columns?: string[];
   /** Datatable relation targets (omitted for non-datatable blocks). */
   relations?: Array<{
     column: string;
