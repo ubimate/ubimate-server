@@ -132,6 +132,8 @@ export interface BlockRegistryEntry {
   value?: string;
   /** Datatable column names (schema), published so other datatables can build pickers. */
   columns?: string[];
+  /** Datatable column definitions with types, used for ER diagram rendering. */
+  columnDefs?: Array<{ name: string; type: string }>;
   /** Datatable relation targets (omitted for non-datatable blocks). */
   relations?: Array<{
     column: string;
