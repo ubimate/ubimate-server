@@ -193,6 +193,42 @@ const MIGRATIONS: Migration[] = [
       db.pragma('foreign_keys = ON');
     },
   },
+  {
+    // Introduce 'db-page' as a dedicated document type for row-pages (pages
+    // that live inside a db-folder and back a single datatable row).
+    // Migrates all existing 'page' docs whose parent is a 'db-folder' to 'db-page'.
+    version: 6,
+    run: (db) => {
+      db.pragma('foreign_keys = OFF');
+      db.exec(`
+        CREATE TABLE documents_new (
+          id             TEXT    PRIMARY KEY,
+          parent_id      TEXT    REFERENCES documents_new(id) ON DELETE CASCADE,
+          type           TEXT    NOT NULL CHECK(type IN ('page', 'db-page', 'folder', 'db-folder', 'workspace', 'image', 'file', 'block-registry')),
+          position       TEXT    NOT NULL DEFAULT 'a0',
+          properties     TEXT    NOT NULL DEFAULT '{}',
+          created_at     INTEGER NOT NULL,
+          updated_at     INTEGER NOT NULL,
+          last_struct_ts INTEGER NOT NULL DEFAULT 0
+        );
+        INSERT INTO documents_new
+          SELECT
+            id, parent_id,
+            CASE
+              WHEN type = 'page' AND parent_id IN (SELECT id FROM documents WHERE type = 'db-folder')
+              THEN 'db-page'
+              ELSE type
+            END AS type,
+            position, properties, created_at, updated_at, last_struct_ts
+          FROM documents;
+        DROP TABLE documents;
+        ALTER TABLE documents_new RENAME TO documents;
+        CREATE INDEX IF NOT EXISTS idx_documents_parent_id ON documents(parent_id);
+        CREATE INDEX IF NOT EXISTS idx_documents_type      ON documents(type);
+      `);
+      db.pragma('foreign_keys = ON');
+    },
+  },
 ];
 
 function runMigrations(db: Database.Database): void {

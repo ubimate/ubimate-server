@@ -3,7 +3,7 @@
 // This is the single source of truth for the Notefinity data model.
 // ---------------------------------------------------------------------------
 
-export type DocumentType = 'page' | 'folder' | 'db-folder' | 'workspace' | 'image' | 'file' | 'block-registry';
+export type DocumentType = 'page' | 'db-page' | 'folder' | 'db-folder' | 'workspace' | 'image' | 'file' | 'block-registry';
 
 /**
  * A document as returned by the REST API (properties already parsed from JSON).
