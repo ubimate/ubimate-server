@@ -138,6 +138,7 @@ export interface BlockRegistryEntry {
   relations?: Array<{
     column: string;
     targetBlockId: string;
+    type?: 'one-to-one' | 'one-to-many' | 'many-to-one';
     /** Columns of the target datatable this block needs for relation chips / row-picker. */
     projectedColumns: string[];
   }>;
