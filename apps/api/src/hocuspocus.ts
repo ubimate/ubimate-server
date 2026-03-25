@@ -11,6 +11,47 @@ function isBlockRegistryDoc(documentName: string): boolean {
   return documentName.startsWith('block-registry:');
 }
 
+/**
+ * Walk the y-prosemirror XML fragment and clear every `lockedBy` node
+ * attribute that belongs to `userId`.  Called server-side on disconnect so
+ * abrupt client exits (CMD-Q, crash, network drop) don't leave blocks locked
+ * until the 45-second TTL expires.
+ */
+function releaseLocksForUser(ydoc: Y.Doc, userId: string): void {
+  const fragment = ydoc.getXmlFragment('prosemirror');
+  const toRelease: Y.XmlElement[] = [];
+
+  function walk(node: Y.XmlElement | Y.XmlFragment): void {
+    if (node instanceof Y.XmlElement) {
+      const raw = node.getAttribute('lockedBy');
+      if (typeof raw === 'string' && raw) {
+        try {
+          const lock = JSON.parse(raw) as { userId?: string };
+          if (lock?.userId === userId) {
+            toRelease.push(node);
+          }
+        } catch { /* not a valid lock json */ }
+      }
+    }
+    node.toArray().forEach((child) => {
+      if (child instanceof Y.XmlElement) walk(child);
+    });
+  }
+
+  walk(fragment);
+
+  if (toRelease.length > 0) {
+    ydoc.transact(() => {
+      for (const el of toRelease) {
+        el.removeAttribute('lockedBy');
+      }
+    });
+    console.log(
+      `[yjs] Released ${toRelease.length} lock(s) for user ${userId} on disconnect`,
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Hocuspocus server
 //
@@ -106,8 +147,19 @@ export const hocuspocus = Server.configure({
     console.log(`[yjs] Client ${socketId} connected to "${documentName}"`);
   },
 
-  async onDisconnect({ documentName, socketId, document }: onDisconnectPayload) {
+  async onDisconnect({ documentName, socketId, document, context }: onDisconnectPayload) {
     console.log(`[yjs] Client ${socketId} disconnected from "${documentName}"`);
+
+    // Release any block locks held by the disconnecting user inside the
+    // ProseMirror XML fragment.  This fires for every disconnect (normal
+    // tab-close, CMD-Q, crash, network drop) so abrupt quits are covered
+    // even when the client never gets a chance to send an unlock update.
+    const userId = (context as { userId?: string })?.userId;
+    if (userId) {
+      releaseLocksForUser(document, userId);
+    }
+
+    // Legacy: clean up expired entries in the drawio-locks Yjs Map.
     const DRAWIO_LOCK_TTL = 2 * 60 * 1000;
     const locksMap = document.getMap('drawio-locks') as Y.Map<{ acquiredAt?: number }>;
     locksMap.forEach((val, key) => {
