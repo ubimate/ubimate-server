@@ -11,8 +11,8 @@
   },
   "dependencies": {
     "@hocuspocus/server": "^2.13.3",
-    "@notefinity/types": "workspace:*",
-    "@notefinity/utils": "workspace:*",
+    "@sovernote/types": "workspace:*",
+    "@sovernote/utils": "workspace:*",
     "bcryptjs": "^3.0.3",
     "better-sqlite3": "^11.10.0",
     "cookie-parser": "^1.4.7",

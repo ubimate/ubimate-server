@@ -1,5 +1,5 @@
 {
-  "name": "@notefinity/utils",
+  "name": "@sovernote/utils",
   "version": "0.1.0",
   "private": true,
   "main": "./dist/index.js",

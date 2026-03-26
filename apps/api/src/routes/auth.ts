@@ -6,7 +6,7 @@ import rateLimit from 'express-rate-limit';
 import { registryStmts, parseUserProperties } from '../db/registry';
 import type { UserRow } from '../db/registry';
 import { JWT_SECRET, JWT_EXPIRES_IN, requireAuth } from '../middleware/auth';
-import type { AuthPayload } from '@notefinity/types';
+import type { AuthPayload } from '@sovernote/types';
 
 export const authRouter = Router();
 

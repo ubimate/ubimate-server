@@ -11,8 +11,8 @@ import type {
   StructOp,
   SyncStructuralPayload,
   SyncStructuralResult,
-} from '@notefinity/types';
-import { generateKeyBetween } from '@notefinity/utils';
+} from '@sovernote/types';
+import { generateKeyBetween } from '@sovernote/utils';
 import { requireAuth } from '../middleware/auth';
 
 const DATA_DIR = process.env.DATA_DIR ?? path.join(__dirname, '../../data');

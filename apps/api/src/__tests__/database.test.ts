@@ -10,7 +10,7 @@ import type { UserDbHandle } from '../db/database';
 // ---------------------------------------------------------------------------
 
 function makeTmpDb(): { handle: UserDbHandle; tmpDir: string } {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'notefinity-test-'));
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sovernote-test-'));
   const handle = initUserDb(path.join(tmpDir, 'test.db'));
   return { handle, tmpDir };
 }

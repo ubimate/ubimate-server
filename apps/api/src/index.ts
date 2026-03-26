@@ -30,7 +30,7 @@ const DATA_DIR = process.env.DATA_DIR ?? path.join(__dirname, '../data');
 
 const app = express();
 
-// In production set CORS_ORIGIN to the exact origin (e.g. https://app.notefinity.com).
+// In production set CORS_ORIGIN to the exact origin (e.g. https://app.sovernote.com).
 // In development we allow any localhost / 127.0.0.1 / ::1 origin on any port
 // so Safari, Chrome, and Tauri webviews all work without extra config.
 const corsOrigin: cors.CorsOptions['origin'] = process.env.CORS_ORIGIN

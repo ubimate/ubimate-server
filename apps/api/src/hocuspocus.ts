@@ -72,7 +72,7 @@ export const hocuspocus = Server.configure({
   port: 1234,
 
   /**
-   * Debounce onChange calls by 1 s (matching notefinity17's behaviour).
+   * Debounce onChange calls by 1 s (matching sovernote17's behaviour).
    */
   debounce: 1000,
 

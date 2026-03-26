@@ -1,5 +1,5 @@
 {
-  "name": "@notefinity/types",
+  "name": "@sovernote/types",
   "version": "0.1.0",
   "private": true,
   "main": "./src/index.ts",
