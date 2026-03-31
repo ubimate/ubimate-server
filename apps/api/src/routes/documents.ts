@@ -386,6 +386,76 @@ documentsRouter.post('/sync/structural', (req: Request, res: Response) => {
 });
 
 // ---------------------------------------------------------------------------
+// PATCH /api/documents/:id/trash
+// ---------------------------------------------------------------------------
+documentsRouter.patch('/:id/trash', (req: Request, res: Response) => {
+  const { db, stmts } = req.userDbHandle;
+  const existing = stmts.getDocument.get(req.params.id) as DocumentRow | undefined;
+  if (!existing) return res.status(404).json({ error: 'Document not found' });
+  const now = Date.now();
+  db.prepare(`
+    WITH RECURSIVE subtree(id) AS (
+      SELECT id FROM documents WHERE id = ?
+      UNION ALL
+      SELECT d.id FROM documents d JOIN subtree s ON d.parent_id = s.id
+    )
+    UPDATE documents SET status = status | 2, status_timestamp = ?
+    WHERE id IN (SELECT id FROM subtree)
+  `).run(req.params.id, now);
+  const updated = stmts.getDocument.get(req.params.id) as DocumentRow;
+  broadcastTreeChanged(req.userId);
+  res.json(toOut(updated));
+});
+
+// ---------------------------------------------------------------------------
+// PATCH /api/documents/:id/untrash
+// ---------------------------------------------------------------------------
+documentsRouter.patch('/:id/untrash', (req: Request, res: Response) => {
+  const { db, stmts } = req.userDbHandle;
+  const existing = stmts.getDocument.get(req.params.id) as DocumentRow | undefined;
+  if (!existing) return res.status(404).json({ error: 'Document not found' });
+  const now = Date.now();
+  db.prepare(`
+    WITH RECURSIVE subtree(id) AS (
+      SELECT id FROM documents WHERE id = ?
+      UNION ALL
+      SELECT d.id FROM documents d JOIN subtree s ON d.parent_id = s.id
+    )
+    UPDATE documents SET status = (status & ~2), status_timestamp = ?
+    WHERE id IN (SELECT id FROM subtree)
+  `).run(req.params.id, now);
+  const updated = stmts.getDocument.get(req.params.id) as DocumentRow;
+  broadcastTreeChanged(req.userId);
+  res.json(toOut(updated));
+});
+
+// ---------------------------------------------------------------------------
+// PATCH /api/documents/:id/archive
+// ---------------------------------------------------------------------------
+documentsRouter.patch('/:id/archive', (req: Request, res: Response) => {
+  const { stmts } = req.userDbHandle;
+  const existing = stmts.getDocument.get(req.params.id) as DocumentRow | undefined;
+  if (!existing) return res.status(404).json({ error: 'Document not found' });
+  stmts.archiveDocument.run(Date.now(), req.params.id);
+  const updated = stmts.getDocument.get(req.params.id) as DocumentRow;
+  broadcastTreeChanged(req.userId);
+  res.json(toOut(updated));
+});
+
+// ---------------------------------------------------------------------------
+// PATCH /api/documents/:id/unarchive
+// ---------------------------------------------------------------------------
+documentsRouter.patch('/:id/unarchive', (req: Request, res: Response) => {
+  const { stmts } = req.userDbHandle;
+  const existing = stmts.getDocument.get(req.params.id) as DocumentRow | undefined;
+  if (!existing) return res.status(404).json({ error: 'Document not found' });
+  stmts.unarchiveDocument.run(Date.now(), req.params.id);
+  const updated = stmts.getDocument.get(req.params.id) as DocumentRow;
+  broadcastTreeChanged(req.userId);
+  res.json(toOut(updated));
+});
+
+// ---------------------------------------------------------------------------
 // DELETE /api/documents/:id
 // ---------------------------------------------------------------------------
 documentsRouter.delete('/:id', (req: Request, res: Response) => {
@@ -425,6 +495,7 @@ documentsRouter.delete('/:id', (req: Request, res: Response) => {
     }
   }
 
+  // deleteDocument prepared statement already deletes the whole subtree via recursive CTE.
   stmts.deleteDocument.run(req.params.id);
   broadcastTreeChanged(req.userId);
   res.status(204).end();

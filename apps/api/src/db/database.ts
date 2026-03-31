@@ -17,6 +17,8 @@ export interface UserStmts {
   insertDocument: Statement;
   updateDocument: Statement;
   deleteDocument: Statement;
+  archiveDocument: Statement;
+  unarchiveDocument: Statement;
   updateDocumentProperties: Statement;
   repositionDocument: Statement;
   syncUpdateProperties: Statement;
@@ -324,7 +326,16 @@ export function initUserDb(dbPath: string): UserDbHandle {
           last_struct_ts = @last_struct_ts
       WHERE id = @id
     `),
-    deleteDocument: db.prepare(`DELETE FROM documents WHERE id = ?`),
+    deleteDocument: db.prepare(`
+      WITH RECURSIVE subtree(id) AS (
+        SELECT id FROM documents WHERE id = ?
+        UNION ALL
+        SELECT d.id FROM documents d JOIN subtree s ON d.parent_id = s.id
+      )
+      DELETE FROM documents WHERE id IN (SELECT id FROM subtree)
+    `),
+    archiveDocument: db.prepare(`UPDATE documents SET status = status | 1, status_timestamp = ? WHERE id = ?`),
+    unarchiveDocument: db.prepare(`UPDATE documents SET status = (status & ~1), status_timestamp = ? WHERE id = ?`),
     updateDocumentProperties: db.prepare(`
       UPDATE documents
       SET properties = @properties,
