@@ -59,6 +59,8 @@ interface DocumentRow {
   updated_at: number;
   /** Unix ms of the last structural operation applied to this document. Used for LWW sync. */
   last_struct_ts: number;
+  status: number;
+  status_timestamp: number | null;
 }
 
 function toOut(row: DocumentRow): Document {
@@ -70,6 +72,8 @@ function toOut(row: DocumentRow): Document {
     properties: JSON.parse(row.properties),
     created_at: row.created_at,
     updated_at: row.updated_at,
+    status: row.status ?? 0,
+    status_timestamp: row.status_timestamp ?? null,
   };
 }
 

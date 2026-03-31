@@ -229,6 +229,22 @@ const MIGRATIONS: Migration[] = [
       db.pragma('foreign_keys = ON');
     },
   },
+  {
+    // Add archival/trash status bitfield columns.
+    version: 7,
+    run: (db) => {
+      for (const sql of [
+        `ALTER TABLE documents ADD COLUMN status           INTEGER NOT NULL DEFAULT 0`,
+        `ALTER TABLE documents ADD COLUMN status_timestamp INTEGER`,
+      ]) {
+        try { db.exec(sql); } catch (err: unknown) {
+          if (err instanceof Error && err.message.includes('duplicate column name')) {
+            /* already present — skip */
+          } else { throw err; }
+        }
+      }
+    },
+  },
 ];
 
 function runMigrations(db: Database.Database): void {
@@ -282,13 +298,15 @@ export function initUserDb(dbPath: string): UserDbHandle {
 
   const stmts: UserStmts = {
     listDocuments: db.prepare(`
-      SELECT id, parent_id, type, position, properties, created_at, updated_at, last_struct_ts
+      SELECT id, parent_id, type, position, properties, created_at, updated_at, last_struct_ts,
+             status, status_timestamp
       FROM documents
       WHERE type != 'block-registry'
       ORDER BY position ASC
     `),
     getDocument: db.prepare(`
-      SELECT id, parent_id, type, position, properties, created_at, updated_at, last_struct_ts
+      SELECT id, parent_id, type, position, properties, created_at, updated_at, last_struct_ts,
+             status, status_timestamp
       FROM documents
       WHERE id = ?
     `),

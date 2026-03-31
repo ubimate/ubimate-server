@@ -18,6 +18,17 @@ export interface Document {
   properties: Record<string, unknown>;
   created_at: number; // Unix ms
   updated_at: number; // Unix ms
+  /**
+   * Archival/trash status bitfield.
+   *   0 = active (normal)
+   *   1 = archived
+   *   2 = trashed
+   *   3 = archived-and-trashed
+   * Bit 0 (0x1) = archived; Bit 1 (0x2) = trashed.
+   */
+  status: number;
+  /** Unix epoch seconds; null when the document has never left the active state. */
+  status_timestamp: number | null;
 }
 
 /** Payload for POST /api/documents */
