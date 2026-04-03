@@ -141,6 +141,8 @@ export interface BlockRegistryEntry {
   type: string;
   /** Smart-tag instance value (omitted for non-tag blocks). */
   value?: string;
+  /** Task checked state — true when done (only for type === "task"). */
+  checked?: boolean;
   /** Datatable column names (schema), published so other datatables can build pickers. */
   columns?: string[];
   /** Datatable column definitions with types, used for ER diagram rendering. */
