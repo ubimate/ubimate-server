@@ -182,6 +182,8 @@ export interface TagDefinition {
   valueType: 'string' | 'number' | 'date' | 'boolean' | 'select';
   /** Valid options — only present when `valueType` is "select". */
   options?: string[];
+  /** Color palette name assigned at tag creation (e.g. "blue", "green"). */
+  color?: string;
   /** Unix ms timestamp at last write. */
   updatedAt: number;
 }
