@@ -145,6 +145,8 @@ export interface BlockRegistryEntry {
   checked?: boolean;
   /** 0-based position of the task within its page (document order). Used for sidebar sorting. */
   order?: number;
+  /** Indentation level of the task (mirrors flatListItem indent attr). Used for sidebar nesting. */
+  indent?: number;
   /** Datatable column names (schema), published so other datatables can build pickers. */
   columns?: string[];
   /** Datatable column definitions with types, used for ER diagram rendering. */
