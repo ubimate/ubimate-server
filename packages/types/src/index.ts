@@ -170,6 +170,8 @@ export interface BlockRegistryEntry {
     /** rowId → { columnName → value } restricted to `columns`. */
     rows: Record<string, Record<string, string>>;
   };
+  /** Surrounding prose text snippet for date/datetime entries (calendar sidebar display). */
+  excerpt?: string;
   /** Unix ms timestamp at last write. */
   updatedAt: number;
 }
