@@ -172,6 +172,19 @@ export interface BlockRegistryEntry {
   };
   /** Surrounding prose text snippet for date/datetime entries (calendar sidebar display). */
   excerpt?: string;
+  // ── Media fields (type === 'image' | 'file' | 'audio') ──────────────────
+  /** URL/path of the media asset. */
+  mediaSrc?: string;
+  /** Alt text — image blocks only. */
+  mediaAlt?: string;
+  /** Caption — image and audio blocks. */
+  mediaCaption?: string;
+  /** Original filename — file blocks only. */
+  mediaFilename?: string;
+  /** MIME type — file blocks only. */
+  mediaMimeType?: string;
+  /** File size in bytes — file blocks only. */
+  mediaFileSize?: number;
   /** Unix ms timestamp at last write. */
   updatedAt: number;
 }
