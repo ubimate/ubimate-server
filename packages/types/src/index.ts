@@ -143,6 +143,8 @@ export interface BlockRegistryEntry {
   value?: string;
   /** Task checked state — true when done (only for type === "task"). */
   checked?: boolean;
+  /** 0-based position of the task within its page (document order). Used for sidebar sorting. */
+  order?: number;
   /** Datatable column names (schema), published so other datatables can build pickers. */
   columns?: string[];
   /** Datatable column definitions with types, used for ER diagram rendering. */
