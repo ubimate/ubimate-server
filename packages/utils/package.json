@@ -18,11 +18,11 @@
     "clean": "rm -rf dist"
   },
   "devDependencies": {
-    "@types/mudder": "^2.1.3",
-    "typescript": "~5.9.3",
-    "vitest": "^4.0.0"
+    "@types/mudder": "2.1.3",
+    "typescript": "5.9.3",
+    "vitest": "4.0.0"
   },
   "dependencies": {
-    "mudder": "^2.1.1"
+    "mudder": "2.1.1"
   }
 }
