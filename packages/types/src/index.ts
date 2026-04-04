@@ -172,6 +172,8 @@ export interface BlockRegistryEntry {
   };
   /** Surrounding prose text snippet for date/datetime entries (calendar sidebar display). */
   excerpt?: string;
+  /** IDs of tagMention nodes that appear in the same block as a date/datetime mention. */
+  contextTagIds?: string[];
   // ── Media fields (type === 'image' | 'file' | 'audio') ──────────────────
   /** URL/path of the media asset. */
   mediaSrc?: string;
