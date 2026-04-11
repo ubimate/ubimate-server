@@ -160,6 +160,8 @@ documentsRouter.post('/', (req: Request, res: Response) => {
     created_at: now,
     updated_at: now,
     last_struct_ts: now,
+    status: 0,
+    status_timestamp: null,
   };
 
   stmts.insertDocument.run(doc);
@@ -189,6 +191,8 @@ documentsRouter.put('/:id', (req: Request, res: Response) => {
       : existing.properties,
     updated_at:    Date.now(),
     last_struct_ts: existing.last_struct_ts,
+    status: existing.status,
+    status_timestamp: existing.status_timestamp,
   };
 
   stmts.updateDocument.run(updated);
@@ -237,6 +241,8 @@ documentsRouter.patch('/:id/reposition', (req: Request, res: Response) => {
     properties: existing.properties,
     updated_at: Date.now(),
     last_struct_ts: client_ts ?? Date.now(),
+    status: existing.status,
+    status_timestamp: existing.status_timestamp,
   };
 
   stmts.repositionDocument.run(updated);

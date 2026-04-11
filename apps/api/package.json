@@ -10,7 +10,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@hocuspocus/server": "2.13.3",
+    "@hocuspocus/server": "2.15.3",
     "@sovernote/types": "workspace:*",
     "@sovernote/utils": "workspace:*",
     "bcryptjs": "3.0.3",
