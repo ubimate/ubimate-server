@@ -313,8 +313,8 @@ export function initUserDb(dbPath: string): UserDbHandle {
       WHERE id = ?
     `),
     insertDocument: db.prepare(`
-      INSERT INTO documents (id, parent_id, type, position, properties, created_at, updated_at, last_struct_ts)
-      VALUES (@id, @parent_id, @type, @position, @properties, @created_at, @updated_at, @last_struct_ts)
+      INSERT INTO documents (id, parent_id, type, position, properties, created_at, updated_at, last_struct_ts, status, status_timestamp)
+      VALUES (@id, @parent_id, @type, @position, @properties, @created_at, @updated_at, @last_struct_ts, @status, @status_timestamp)
     `),
     updateDocument: db.prepare(`
       UPDATE documents

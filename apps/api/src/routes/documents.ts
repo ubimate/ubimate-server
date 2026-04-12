@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { randomUUID } from 'crypto';
 import path from 'path';
 import fs from 'fs';
+import * as Y from 'yjs';
 import type {
   Document,
   DocumentType,
@@ -288,7 +289,7 @@ documentsRouter.post('/sync/structural', (req: Request, res: Response) => {
         // ------------------------------------------------------------------
         if (existing) { skipped++; continue; }
 
-        const payload = op.payload as CreateDocumentPayload;
+        const payload = op.payload as CreateDocumentPayload & { status?: number; status_timestamp?: number | null };
         if (!payload.type || !['page', 'db-page', 'folder', 'db-folder', 'workspace'].includes(payload.type)) {
           skipped++; continue;
         }
@@ -305,6 +306,8 @@ documentsRouter.post('/sync/structural', (req: Request, res: Response) => {
           created_at:    op.client_ts,
           updated_at:    op.client_ts,
           last_struct_ts: op.client_ts,
+          status:        payload.status ?? 0,
+          status_timestamp: payload.status_timestamp ?? null,
         });
         applied++;
         continue;
@@ -505,4 +508,66 @@ documentsRouter.delete('/:id', (req: Request, res: Response) => {
   stmts.deleteDocument.run(req.params.id);
   broadcastTreeChanged(req.userId);
   res.status(204).end();
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/documents/:id/yjs
+// Returns the full Yjs state for a document as a base64-encoded binary blob.
+// The Tauri client uses this during initial Yjs sync to fetch the cloud state.
+// ---------------------------------------------------------------------------
+documentsRouter.get('/:id/yjs', (req: Request, res: Response) => {
+  const { getYjsUpdates } = req.userDbHandle;
+  const updates = getYjsUpdates(req.params.id);
+
+  if (updates.length === 0) {
+    // Document has no Yjs content on the server — return an empty update.
+    return res.json({ state: null });
+  }
+
+  // Merge all stored update rows into a single Y.Doc, then encode as one
+  // compact binary blob (equivalent to compact_yjs_updates).
+  const ydoc = new Y.Doc();
+  for (const update of updates) {
+    Y.applyUpdate(ydoc, update);
+  }
+  const state = Buffer.from(Y.encodeStateAsUpdate(ydoc)).toString('base64');
+  return res.json({ state });
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/documents/:id/yjs
+// Accepts a Yjs state update (base64-encoded binary), applies it to the
+// server's stored state, and broadcasts to any connected Hocuspocus clients.
+//
+// Body: { update: string }  — base64-encoded Yjs update binary
+// ---------------------------------------------------------------------------
+documentsRouter.post('/:id/yjs', (req: Request, res: Response) => {
+  const { update } = req.body as { update?: string };
+  if (typeof update !== 'string' || !update) {
+    return res.status(400).json({ error: 'update (base64 string) is required' });
+  }
+
+  let updateBytes: Buffer;
+  try {
+    updateBytes = Buffer.from(update, 'base64');
+  } catch {
+    return res.status(400).json({ error: 'update must be a valid base64 string' });
+  }
+
+  const { appendYjsUpdate, countYjsUpdates, compactYjsUpdates, getYjsUpdates } = req.userDbHandle;
+
+  // Append the incoming delta to the persistent store.
+  appendYjsUpdate(req.params.id, updateBytes);
+
+  const rowCount = countYjsUpdates(req.params.id);
+  if (rowCount >= 50) {
+    // Compact: merge all rows into a single snapshot.
+    const allUpdates = getYjsUpdates(req.params.id);
+    const ydoc = new Y.Doc();
+    for (const u of allUpdates) Y.applyUpdate(ydoc, u);
+    const snapshot = Y.encodeStateAsUpdate(ydoc);
+    compactYjsUpdates(req.params.id, snapshot);
+  }
+
+  return res.status(204).end();
 });
