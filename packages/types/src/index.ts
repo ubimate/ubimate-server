@@ -24,7 +24,8 @@ export interface Document {
    *   1 = archived
    *   2 = trashed
    *   3 = archived-and-trashed
-   * Bit 0 (0x1) = archived; Bit 1 (0x2) = trashed.
+   *   4 = deleted (tombstone — permanent delete; row kept for sync LWW)
+   * Bit 0 (0x1) = archived; Bit 1 (0x2) = trashed; Bit 2 (0x4) = deleted.
    */
   status: number;
   /** Unix epoch seconds; null when the document has never left the active state. */

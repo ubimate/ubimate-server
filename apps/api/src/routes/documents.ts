@@ -327,7 +327,8 @@ documentsRouter.post('/sync/structural', (req: Request, res: Response) => {
         if (!existing) { skipped++; continue; }
         if (op.client_ts <= existing.last_struct_ts) { skipped++; continue; }
 
-        stmts.deleteDocument.run(op.id);
+        const deleteNow = Date.now();
+        stmts.deleteDocument.run(op.id, deleteNow, deleteNow);
         applied++;
         continue;
       }
@@ -535,8 +536,9 @@ documentsRouter.delete('/:id', (req: Request, res: Response) => {
     }
   }
 
-  // deleteDocument prepared statement already deletes the whole subtree via recursive CTE.
-  stmts.deleteDocument.run(req.params.id);
+  // deleteDocument prepared statement soft-deletes the whole subtree (status = 4 tombstone).
+  const permanentDeleteNow = Date.now();
+  stmts.deleteDocument.run(req.params.id, permanentDeleteNow, permanentDeleteNow);
   broadcastTreeChanged(req.userId);
   res.status(204).end();
 });

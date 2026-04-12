@@ -350,7 +350,8 @@ export function initUserDb(dbPath: string): UserDbHandle {
         UNION ALL
         SELECT d.id FROM documents d JOIN subtree s ON d.parent_id = s.id
       )
-      DELETE FROM documents WHERE id IN (SELECT id FROM subtree)
+      UPDATE documents SET status = 4, status_timestamp = ?, updated_at = ?
+      WHERE id IN (SELECT id FROM subtree)
     `),
     archiveDocument: db.prepare(`UPDATE documents SET status = status | 1, status_timestamp = ?, updated_at = ? WHERE id = ?`),
     unarchiveDocument: db.prepare(`UPDATE documents SET status = (status & ~1), status_timestamp = ?, updated_at = ? WHERE id = ?`),
