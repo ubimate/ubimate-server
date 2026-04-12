@@ -17,6 +17,7 @@ export interface UserStmts {
   insertDocument: Statement;
   updateDocument: Statement;
   deleteDocument: Statement;
+  deleteYjsUpdatesForSubtree: Statement;
   archiveDocument: Statement;
   unarchiveDocument: Statement;
   updateDocumentStatus: Statement;
@@ -352,6 +353,14 @@ export function initUserDb(dbPath: string): UserDbHandle {
       )
       UPDATE documents SET status = 4, status_timestamp = ?, updated_at = ?
       WHERE id IN (SELECT id FROM subtree)
+    `),
+    deleteYjsUpdatesForSubtree: db.prepare(`
+      WITH RECURSIVE subtree(id) AS (
+        SELECT id FROM documents WHERE id = ?
+        UNION ALL
+        SELECT d.id FROM documents d JOIN subtree s ON d.parent_id = s.id
+      )
+      DELETE FROM yjs_updates WHERE document_id IN (SELECT id FROM subtree)
     `),
     archiveDocument: db.prepare(`UPDATE documents SET status = status | 1, status_timestamp = ?, updated_at = ? WHERE id = ?`),
     unarchiveDocument: db.prepare(`UPDATE documents SET status = (status & ~1), status_timestamp = ?, updated_at = ? WHERE id = ?`),

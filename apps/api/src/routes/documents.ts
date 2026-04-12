@@ -329,6 +329,7 @@ documentsRouter.post('/sync/structural', (req: Request, res: Response) => {
 
         const deleteNow = Date.now();
         stmts.deleteDocument.run(op.id, deleteNow, deleteNow);
+        stmts.deleteYjsUpdatesForSubtree.run(op.id);
         applied++;
         continue;
       }
@@ -539,6 +540,7 @@ documentsRouter.delete('/:id', (req: Request, res: Response) => {
   // deleteDocument prepared statement soft-deletes the whole subtree (status = 4 tombstone).
   const permanentDeleteNow = Date.now();
   stmts.deleteDocument.run(req.params.id, permanentDeleteNow, permanentDeleteNow);
+  stmts.deleteYjsUpdatesForSubtree.run(req.params.id);
   broadcastTreeChanged(req.userId);
   res.status(204).end();
 });
