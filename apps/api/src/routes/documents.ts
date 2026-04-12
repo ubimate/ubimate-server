@@ -246,6 +246,7 @@ documentsRouter.patch('/:id/reposition', (req: Request, res: Response) => {
     properties: existing.properties,
     updated_at: Date.now(),
     last_struct_ts: client_ts ?? Date.now(),
+    last_properties_ts: existing.last_properties_ts,
     status: existing.status,
     status_timestamp: existing.status_timestamp,
   };
