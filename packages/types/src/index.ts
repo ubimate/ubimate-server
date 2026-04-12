@@ -55,6 +55,12 @@ export interface RepositionDocumentPayload {
   before_id: string | null;
   /** Unix ms — client clock at the time of the operation. Enables LWW sync semantics. */
   client_ts?: number;
+  /**
+   * When provided by the sync layer, the server uses this fractional-index
+   * string directly instead of computing a new one from `before_id`.
+   * This preserves exact ordering across devices during reconnect sync.
+   */
+  position?: string;
 }
 
 // ---------------------------------------------------------------------------

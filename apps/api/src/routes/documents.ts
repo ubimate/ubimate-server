@@ -60,6 +60,8 @@ interface DocumentRow {
   updated_at: number;
   /** Unix ms of the last structural operation applied to this document. Used for LWW sync. */
   last_struct_ts: number;
+  /** Unix ms of the last properties update. Independent LWW domain from last_struct_ts. */
+  last_properties_ts: number;
   status: number;
   status_timestamp: number | null;
 }
@@ -161,6 +163,7 @@ documentsRouter.post('/', (req: Request, res: Response) => {
     created_at: now,
     updated_at: now,
     last_struct_ts: now,
+    last_properties_ts: now,
     status: 0,
     status_timestamp: null,
   };
@@ -184,14 +187,15 @@ documentsRouter.put('/:id', (req: Request, res: Response) => {
 
   const updated = {
     id: existing.id,
-    parent_id:     parent_id  !== undefined ? parent_id  : existing.parent_id,
-    type:          type        !== undefined ? type        : existing.type,
-    position:      position    !== undefined ? position    : existing.position,
-    properties:    properties  !== undefined
+    parent_id:          parent_id  !== undefined ? parent_id  : existing.parent_id,
+    type:               type        !== undefined ? type        : existing.type,
+    position:           position    !== undefined ? position    : existing.position,
+    properties:         properties  !== undefined
       ? JSON.stringify(properties)
       : existing.properties,
-    updated_at:    Date.now(),
-    last_struct_ts: existing.last_struct_ts,
+    updated_at:         Date.now(),
+    last_struct_ts:     existing.last_struct_ts,
+    last_properties_ts: properties !== undefined ? Date.now() : existing.last_properties_ts,
     status: existing.status,
     status_timestamp: existing.status_timestamp,
   };
@@ -305,7 +309,8 @@ documentsRouter.post('/sync/structural', (req: Request, res: Response) => {
           properties:    JSON.stringify(payload.properties ?? {}),
           created_at:    op.client_ts,
           updated_at:    op.client_ts,
-          last_struct_ts: op.client_ts,
+          last_struct_ts:     op.client_ts,
+          last_properties_ts: op.client_ts,
           status:        payload.status ?? 0,
           status_timestamp: payload.status_timestamp ?? null,
         });
@@ -331,11 +336,15 @@ documentsRouter.post('/sync/structural', (req: Request, res: Response) => {
         if (!existing) { skipped++; continue; }
         if (op.client_ts <= existing.last_struct_ts) { skipped++; continue; }
 
-        const { parent_id = null, before_id = null } =
+        const { parent_id = null, before_id = null, position: directPosition } =
           op.payload as RepositionDocumentPayload;
 
         let position: string;
-        if (before_id === null) {
+        // If the sync layer supplied the exact fractional-index position string,
+        // use it directly (preserves ordering without needing a before_id lookup).
+        if (directPosition) {
+          position = directPosition;
+        } else if (before_id === null) {
           const lastRow = stmts.lastSiblingPosition.get(parent_id) as
             { position: string } | undefined;
           const lastPos = lastRow && lastRow.position !== existing.position
@@ -366,14 +375,17 @@ documentsRouter.post('/sync/structural', (req: Request, res: Response) => {
 
       if (op.op === 'update_properties') {
         if (!existing) { skipped++; continue; }
-        if (op.client_ts <= existing.last_struct_ts) { skipped++; continue; }
+        // LWW: compare against last_properties_ts (independent of last_struct_ts
+        // so that a reposition on one device doesn't silently drop a rename from
+        // another device that arrived with a slightly older timestamp).
+        if (op.client_ts <= (existing.last_properties_ts ?? 0)) { skipped++; continue; }
 
         const payload = op.payload as UpdateDocumentPayload;
         stmts.syncUpdateProperties.run({
-          id:            op.id,
-          properties:    JSON.stringify(payload.properties ?? JSON.parse(existing.properties)),
-          updated_at:    op.client_ts,
-          last_struct_ts: op.client_ts,
+          id:                 op.id,
+          properties:         JSON.stringify(payload.properties ?? JSON.parse(existing.properties)),
+          updated_at:         op.client_ts,
+          last_properties_ts: op.client_ts,
         });
         applied++;
         continue;

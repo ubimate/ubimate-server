@@ -248,6 +248,22 @@ const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    // Add last_properties_ts for independent LWW tracking of property changes.
+    // Previously update_properties ops were guarded by last_struct_ts, which
+    // reposition also updates — causing renames to be silently dropped when a
+    // concurrent reposition had advanced last_struct_ts on the other device.
+    version: 8,
+    run: (db) => {
+      try {
+        db.exec(`ALTER TABLE documents ADD COLUMN last_properties_ts INTEGER NOT NULL DEFAULT 0`);
+      } catch (err: unknown) {
+        if (err instanceof Error && err.message.includes('duplicate column name')) {
+          /* already present — skip */
+        } else { throw err; }
+      }
+    },
+  },
 ];
 
 function runMigrations(db: Database.Database): void {
@@ -302,29 +318,30 @@ export function initUserDb(dbPath: string): UserDbHandle {
   const stmts: UserStmts = {
     listDocuments: db.prepare(`
       SELECT id, parent_id, type, position, properties, created_at, updated_at, last_struct_ts,
-             status, status_timestamp
+             status, status_timestamp, last_properties_ts
       FROM documents
       WHERE type != 'block-registry'
       ORDER BY position ASC
     `),
     getDocument: db.prepare(`
       SELECT id, parent_id, type, position, properties, created_at, updated_at, last_struct_ts,
-             status, status_timestamp
+             status, status_timestamp, last_properties_ts
       FROM documents
       WHERE id = ?
     `),
     insertDocument: db.prepare(`
-      INSERT INTO documents (id, parent_id, type, position, properties, created_at, updated_at, last_struct_ts, status, status_timestamp)
-      VALUES (@id, @parent_id, @type, @position, @properties, @created_at, @updated_at, @last_struct_ts, @status, @status_timestamp)
+      INSERT INTO documents (id, parent_id, type, position, properties, created_at, updated_at, last_struct_ts, status, status_timestamp, last_properties_ts)
+      VALUES (@id, @parent_id, @type, @position, @properties, @created_at, @updated_at, @last_struct_ts, @status, @status_timestamp, @last_properties_ts)
     `),
     updateDocument: db.prepare(`
       UPDATE documents
-      SET parent_id      = @parent_id,
-          type           = @type,
-          position       = @position,
-          properties     = @properties,
-          updated_at     = @updated_at,
-          last_struct_ts = @last_struct_ts
+      SET parent_id          = @parent_id,
+          type               = @type,
+          position           = @position,
+          properties         = @properties,
+          updated_at         = @updated_at,
+          last_struct_ts     = @last_struct_ts,
+          last_properties_ts = @last_properties_ts
       WHERE id = @id
     `),
     deleteDocument: db.prepare(`
@@ -354,9 +371,9 @@ export function initUserDb(dbPath: string): UserDbHandle {
     `),
     syncUpdateProperties: db.prepare(`
       UPDATE documents
-      SET properties     = @properties,
-          updated_at     = @updated_at,
-          last_struct_ts = @last_struct_ts
+      SET properties         = @properties,
+          updated_at         = @updated_at,
+          last_properties_ts = @last_properties_ts
       WHERE id = @id
     `),
     lastSiblingPosition: db.prepare(`
