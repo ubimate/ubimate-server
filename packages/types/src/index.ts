@@ -38,6 +38,10 @@ export interface CreateDocumentPayload {
   type: DocumentType;
   position?: string;
   properties?: Record<string, unknown>;
+  /** Initial archival/trash status (default 0 = active). Used by sync to preserve status on create. */
+  status?: number;
+  /** Timestamp of the last status change; null when status has never changed. */
+  status_timestamp?: number | null;
 }
 
 /**
