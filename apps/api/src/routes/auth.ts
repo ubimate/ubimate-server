@@ -139,6 +139,47 @@ authRouter.post('/login', authLimiter, async (req: Request, res: Response) => {
 });
 
 // ---------------------------------------------------------------------------
+// POST /api/auth/login/token — for Tauri / API clients
+//
+// Same validation logic as /login but returns the JWT in the response body
+// instead of setting an HttpOnly cookie.  Used by the Tauri desktop app,
+// which cannot rely on the WebView cookie jar for cross-origin requests.
+// ---------------------------------------------------------------------------
+authRouter.post('/login/token', authLimiter, async (req: Request, res: Response) => {
+  const { email, password } = req.body as AuthPayload;
+
+  if (!email || !password) {
+    res.status(400).json({ error: 'email and password are required' });
+    return;
+  }
+
+  const normalizedEmail = email.trim().toLowerCase();
+  const user = registryStmts.getUserByEmail.get(normalizedEmail) as UserRow | undefined;
+
+  const passwordHash = user?.password_hash ?? '$2a$12$invalidhashfortimingnormalization';
+  const valid = await bcrypt.compare(password, passwordHash);
+
+  if (!user || !valid) {
+    res.status(401).json({ error: 'Invalid email or password' });
+    return;
+  }
+
+  if (user.status !== 'active') {
+    res.status(403).json({ error: 'Account is not active' });
+    return;
+  }
+
+  const token = jwt.sign({ sub: user.id, email: user.email }, JWT_SECRET, {
+    expiresIn: JWT_EXPIRES_IN,
+  });
+
+  res.json({
+    user: { id: user.id, email: user.email, properties: parseUserProperties(user), created_at: user.created_at },
+    token,
+  });
+});
+
+// ---------------------------------------------------------------------------
 // POST /api/auth/logout
 // ---------------------------------------------------------------------------
 authRouter.post('/logout', (_req: Request, res: Response) => {

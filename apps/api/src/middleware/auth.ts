@@ -33,7 +33,10 @@ declare global {
 // ---------------------------------------------------------------------------
 
 /**
- * Verifies the JWT from the HttpOnly session cookie.
+ * Verifies the JWT from the HttpOnly session cookie OR an Authorization: Bearer header.
+ * The cookie is the preferred source (browser). The Bearer header is used by the
+ * Tauri desktop app, which cannot rely on the WebView cookie jar for cross-origin
+ * requests to the cloud API.
  * On success, attaches req.userId, req.userEmail, and req.userDbHandle.
  * On failure, responds with 401.
  */
@@ -41,12 +44,17 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
   // Cookie is the primary source — HttpOnly, inaccessible to JS.
   const cookieToken: string | undefined = (req.cookies as Record<string, string>)?.nf_session;
 
-  if (!cookieToken) {
+  // Bearer header is the fallback for Tauri / API clients.
+  const authHeader: string | undefined = req.headers.authorization;
+  const bearerToken: string | undefined =
+    authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : undefined;
+
+  const token = cookieToken ?? bearerToken;
+
+  if (!token) {
     res.status(401).json({ error: 'Authentication required' });
     return;
   }
-
-  const token = cookieToken;
   try {
     const payload = jwt.verify(token, JWT_SECRET) as { sub: string; email: string };
     req.userId = payload.sub;
