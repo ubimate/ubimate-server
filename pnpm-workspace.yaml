@@ -1,4 +1,5 @@
 packages:
   - "apps/*"
+  - "apps/desktop/e2e"
   - "packages/*"
   - "sites/*"
