@@ -62,7 +62,7 @@ export interface RepositionDocumentPayload {
 // ---------------------------------------------------------------------------
 
 /** Identifies which kind of structural mutation an offline op represents. */
-export type StructOpKind = 'reposition' | 'create' | 'delete' | 'update_properties';
+export type StructOpKind = 'reposition' | 'create' | 'delete' | 'update_properties' | 'update_status';
 
 /**
  * A single structural operation recorded by a local app while offline.
@@ -84,8 +84,9 @@ export interface StructOp {
    *   create            → CreateDocumentPayload
    *   delete            → {} (empty object)
    *   update_properties → { properties: Record<string, unknown> }
+   *   update_status     → { status: number } (LWW-guarded by status_timestamp)
    */
-  payload: RepositionDocumentPayload | CreateDocumentPayload | UpdateDocumentPayload | Record<string, never>;
+  payload: RepositionDocumentPayload | CreateDocumentPayload | UpdateDocumentPayload | { status: number } | Record<string, never>;
 }
 
 /** Body of POST /api/sync/structural */

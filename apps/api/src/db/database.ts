@@ -19,6 +19,7 @@ export interface UserStmts {
   deleteDocument: Statement;
   archiveDocument: Statement;
   unarchiveDocument: Statement;
+  updateDocumentStatus: Statement;
   updateDocumentProperties: Statement;
   repositionDocument: Statement;
   syncUpdateProperties: Statement;
@@ -334,8 +335,9 @@ export function initUserDb(dbPath: string): UserDbHandle {
       )
       DELETE FROM documents WHERE id IN (SELECT id FROM subtree)
     `),
-    archiveDocument: db.prepare(`UPDATE documents SET status = status | 1, status_timestamp = ? WHERE id = ?`),
-    unarchiveDocument: db.prepare(`UPDATE documents SET status = (status & ~1), status_timestamp = ? WHERE id = ?`),
+    archiveDocument: db.prepare(`UPDATE documents SET status = status | 1, status_timestamp = ?, updated_at = ? WHERE id = ?`),
+    unarchiveDocument: db.prepare(`UPDATE documents SET status = (status & ~1), status_timestamp = ?, updated_at = ? WHERE id = ?`),
+    updateDocumentStatus: db.prepare(`UPDATE documents SET status = @status, status_timestamp = @status_timestamp, updated_at = @updated_at WHERE id = @id`),
     updateDocumentProperties: db.prepare(`
       UPDATE documents
       SET properties = @properties,

@@ -379,6 +379,23 @@ documentsRouter.post('/sync/structural', (req: Request, res: Response) => {
         continue;
       }
 
+      if (op.op === 'update_status') {
+        if (!existing) { skipped++; continue; }
+        // LWW: compare against status_timestamp (not last_struct_ts, which tracks
+        // structural changes like reposition/rename that are orthogonal to status).
+        if (op.client_ts <= (existing.status_timestamp ?? 0)) { skipped++; continue; }
+
+        const payload = op.payload as { status: number };
+        stmts.updateDocumentStatus.run({
+          id:               op.id,
+          status:           payload.status,
+          status_timestamp: op.client_ts,
+          updated_at:       op.client_ts,
+        });
+        applied++;
+        continue;
+      }
+
       // Unknown op kind — skip
       skipped++;
     }
@@ -408,9 +425,9 @@ documentsRouter.patch('/:id/trash', (req: Request, res: Response) => {
       UNION ALL
       SELECT d.id FROM documents d JOIN subtree s ON d.parent_id = s.id
     )
-    UPDATE documents SET status = status | 2, status_timestamp = ?
+    UPDATE documents SET status = status | 2, status_timestamp = ?, updated_at = ?
     WHERE id IN (SELECT id FROM subtree)
-  `).run(req.params.id, now);
+  `).run(req.params.id, now, now);
   const updated = stmts.getDocument.get(req.params.id) as DocumentRow;
   broadcastTreeChanged(req.userId);
   res.json(toOut(updated));
@@ -430,9 +447,9 @@ documentsRouter.patch('/:id/untrash', (req: Request, res: Response) => {
       UNION ALL
       SELECT d.id FROM documents d JOIN subtree s ON d.parent_id = s.id
     )
-    UPDATE documents SET status = (status & ~2), status_timestamp = ?
+    UPDATE documents SET status = (status & ~2), status_timestamp = ?, updated_at = ?
     WHERE id IN (SELECT id FROM subtree)
-  `).run(req.params.id, now);
+  `).run(req.params.id, now, now);
   const updated = stmts.getDocument.get(req.params.id) as DocumentRow;
   broadcastTreeChanged(req.userId);
   res.json(toOut(updated));
@@ -445,7 +462,8 @@ documentsRouter.patch('/:id/archive', (req: Request, res: Response) => {
   const { stmts } = req.userDbHandle;
   const existing = stmts.getDocument.get(req.params.id) as DocumentRow | undefined;
   if (!existing) return res.status(404).json({ error: 'Document not found' });
-  stmts.archiveDocument.run(Date.now(), req.params.id);
+  const now = Date.now();
+  stmts.archiveDocument.run(now, now, req.params.id);
   const updated = stmts.getDocument.get(req.params.id) as DocumentRow;
   broadcastTreeChanged(req.userId);
   res.json(toOut(updated));
@@ -458,7 +476,8 @@ documentsRouter.patch('/:id/unarchive', (req: Request, res: Response) => {
   const { stmts } = req.userDbHandle;
   const existing = stmts.getDocument.get(req.params.id) as DocumentRow | undefined;
   if (!existing) return res.status(404).json({ error: 'Document not found' });
-  stmts.unarchiveDocument.run(Date.now(), req.params.id);
+  const now = Date.now();
+  stmts.unarchiveDocument.run(now, now, req.params.id);
   const updated = stmts.getDocument.get(req.params.id) as DocumentRow;
   broadcastTreeChanged(req.userId);
   res.json(toOut(updated));
