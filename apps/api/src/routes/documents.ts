@@ -277,7 +277,43 @@ documentsRouter.post('/sync/structural', (req: Request, res: Response) => {
   }
 
   // Sort ascending so older decisions are applied first; newer ones overwrite.
-  const sorted = [...ops].sort((a, b) => a.client_ts - b.client_ts);
+  // For 'create' ops we additionally ensure parents precede children by doing a
+  // topological sort: build a map of id→parent_id from create ops, then order
+  // them so every parent is emitted before its children.  Non-create ops keep
+  // their timestamp order and run after all creates.
+  const createOps = ops.filter(o => o.op === 'create');
+  const otherOps  = ops.filter(o => o.op !== 'create').sort((a, b) => a.client_ts - b.client_ts);
+
+  // Topological sort of create ops (Kahn's algorithm).
+  const createMap = new Map(createOps.map(o => [o.id, o]));
+  const childrenOf = new Map<string | null, string[]>();
+  for (const o of createOps) {
+    const pid = (o.payload as { parent_id?: string | null }).parent_id ?? null;
+    if (!childrenOf.has(pid)) childrenOf.set(pid, []);
+    childrenOf.get(pid)!.push(o.id);
+  }
+  const sortedCreates: typeof createOps = [];
+  // Roots are creates whose parent is not itself being created in this batch.
+  const queue = createOps
+    .filter(o => {
+      const pid = (o.payload as { parent_id?: string | null }).parent_id ?? null;
+      return pid === null || !createMap.has(pid);
+    })
+    .sort((a, b) => a.client_ts - b.client_ts);
+  while (queue.length) {
+    const cur = queue.shift()!;
+    sortedCreates.push(cur);
+    for (const childId of (childrenOf.get(cur.id) ?? []).sort()) {
+      queue.push(createMap.get(childId)!);
+    }
+  }
+  // Any remaining (cycles or orphaned) fall back to timestamp order.
+  const emitted = new Set(sortedCreates.map(o => o.id));
+  for (const o of createOps.filter(o => !emitted.has(o.id)).sort((a, b) => a.client_ts - b.client_ts)) {
+    sortedCreates.push(o);
+  }
+
+  const sorted = [...sortedCreates, ...otherOps];
 
   let applied = 0;
   let skipped = 0;
