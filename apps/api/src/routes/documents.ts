@@ -331,7 +331,7 @@ documentsRouter.post('/sync/structural', (req: Request, res: Response) => {
         if (existing) { skipped++; continue; }
 
         const payload = op.payload as CreateDocumentPayload & { status?: number; status_timestamp?: number | null };
-        if (!payload.type || !['page', 'db-page', 'folder', 'db-folder', 'workspace'].includes(payload.type)) {
+        if (!payload.type || !['page', 'db-page', 'folder', 'db-folder', 'workspace', 'image', 'file'].includes(payload.type)) {
           skipped++; continue;
         }
         const lastRow = stmts.lastSiblingPosition.get(payload.parent_id ?? null) as
