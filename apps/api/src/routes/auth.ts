@@ -82,24 +82,25 @@ authRouter.post('/register', authLimiter, async (req: Request, res: Response) =>
 
   // Invitation token validation
   let matchedInvitation: InvitationRow | undefined;
-  if (REQUIRE_INVITATION) {
-    if (!invitationToken || typeof invitationToken !== 'string') {
-      res.status(400).json({ error: 'Invitation token is required' });
-      return;
-    }
+  if (invitationToken && typeof invitationToken === 'string') {
     matchedInvitation = registryStmts.getInvitationByToken.get(invitationToken) as InvitationRow | undefined;
-    if (!matchedInvitation) {
-      res.status(400).json({ error: 'Invalid invitation token' });
-      return;
+    if (REQUIRE_INVITATION) {
+      if (!matchedInvitation) {
+        res.status(400).json({ error: 'Invalid invitation token' });
+        return;
+      }
+      if (matchedInvitation.accepted_at != null) {
+        res.status(400).json({ error: 'Invitation already used' });
+        return;
+      }
+      if (matchedInvitation.created_at < Date.now() - INVITATION_TTL_MS) {
+        res.status(400).json({ error: 'Invitation has elapsed' });
+        return;
+      }
     }
-    if (matchedInvitation.accepted_at != null) {
-      res.status(400).json({ error: 'Invitation already used' });
-      return;
-    }
-    if (matchedInvitation.created_at < Date.now() - INVITATION_TTL_MS) {
-      res.status(400).json({ error: 'Invitation has elapsed' });
-      return;
-    }
+  } else if (REQUIRE_INVITATION) {
+    res.status(400).json({ error: 'Invitation token is required' });
+    return;
   }
 
   const normalizedEmail = email.trim().toLowerCase();
@@ -124,7 +125,7 @@ authRouter.post('/register', authLimiter, async (req: Request, res: Response) =>
   });
 
   // Mark invitation as accepted
-  if (matchedInvitation) {
+  if (matchedInvitation && matchedInvitation.accepted_at == null) {
     registryStmts.markInvitationAccepted.run(now, matchedInvitation.id);
   }
 

@@ -93,6 +93,7 @@ export const registryStmts = {
   `),
   getUserByEmail: registryDb.prepare(`SELECT * FROM users WHERE email = ?`),
   getUserById: registryDb.prepare(`SELECT * FROM users WHERE id = ?`),
+  deleteUser: registryDb.prepare(`DELETE FROM users WHERE id = ?`),
   listUsers: registryDb.prepare(`SELECT id, email, properties, status, created_at FROM users`),
 
   // Invitations

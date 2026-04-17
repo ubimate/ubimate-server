@@ -136,6 +136,31 @@ adminRouter.get('/users', (_req: Request, res: Response) => {
 });
 
 // ---------------------------------------------------------------------------
+// DELETE /api/admin/users/:id
+// ---------------------------------------------------------------------------
+adminRouter.delete('/users/:id', (req: Request, res: Response) => {
+  const { id } = req.params;
+
+  const row = registryStmts.listUsers.all().find((u: any) => u.id === id);
+  if (!row) {
+    res.status(404).json({ error: 'User not found' });
+    return;
+  }
+
+  registryStmts.deleteUser.run(id);
+
+  // Also remove the user's SQLite database file if it exists.
+  const dbPath = path.join(DATA_DIR, 'users', `${id}.db`);
+  try {
+    fs.unlinkSync(dbPath);
+  } catch {
+    // File may not exist — that's fine.
+  }
+
+  res.status(204).send();
+});
+
+// ---------------------------------------------------------------------------
 // GET /api/admin/invitations
 // ---------------------------------------------------------------------------
 adminRouter.get('/invitations', (_req: Request, res: Response) => {
