@@ -164,15 +164,15 @@ adminRouter.delete('/users/:id', (req: Request, res: Response) => {
     return;
   }
 
-  registryStmts.deleteUser.run(id);
+  // Write a tombstone file preserving the deleted user's metadata.
+  const tombstone = {
+    ...(row as Record<string, unknown>),
+    deleted_at: Date.now(),
+  };
+  const tombstonePath = path.join(DATA_DIR, 'users', `${id}_tombstone.json`);
+  fs.writeFileSync(tombstonePath, JSON.stringify(tombstone, null, 2));
 
-  // Also remove the user's SQLite database file if it exists.
-  const dbPath = path.join(DATA_DIR, 'users', `${id}.db`);
-  try {
-    fs.unlinkSync(dbPath);
-  } catch {
-    // File may not exist — that's fine.
-  }
+  registryStmts.deleteUser.run(id);
 
   res.status(204).send();
 });
