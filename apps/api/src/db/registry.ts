@@ -61,6 +61,31 @@ export function parseUserProperties(row: UserRow): Record<string, unknown> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Invitations table
+// ---------------------------------------------------------------------------
+
+registryDb.exec(`
+  CREATE TABLE IF NOT EXISTS invitations (
+    id          TEXT    PRIMARY KEY,
+    token       TEXT    NOT NULL UNIQUE,
+    email       TEXT    NOT NULL,
+    created_at  INTEGER NOT NULL,
+    accepted_at INTEGER
+  );
+`);
+registryDb.exec(`
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_invitations_token ON invitations(token);
+`);
+
+export interface InvitationRow {
+  id: string;
+  token: string;
+  email: string;
+  created_at: number;
+  accepted_at: number | null;
+}
+
 export const registryStmts = {
   createUser: registryDb.prepare(`
     INSERT INTO users (id, email, properties, password_hash, created_at, status)
@@ -68,4 +93,17 @@ export const registryStmts = {
   `),
   getUserByEmail: registryDb.prepare(`SELECT * FROM users WHERE email = ?`),
   getUserById: registryDb.prepare(`SELECT * FROM users WHERE id = ?`),
+  listUsers: registryDb.prepare(`SELECT id, email, properties, status, created_at FROM users`),
+
+  // Invitations
+  insertInvitation: registryDb.prepare(`
+    INSERT INTO invitations (id, token, email, created_at)
+    VALUES (@id, @token, @email, @created_at)
+  `),
+  getInvitationByToken: registryDb.prepare(`SELECT * FROM invitations WHERE token = ?`),
+  getInvitationById: registryDb.prepare(`SELECT * FROM invitations WHERE id = ?`),
+  listInvitations: registryDb.prepare(`SELECT * FROM invitations ORDER BY created_at DESC`),
+  markInvitationAccepted: registryDb.prepare(`UPDATE invitations SET accepted_at = ? WHERE id = ?`),
+  deleteInvitation: registryDb.prepare(`DELETE FROM invitations WHERE id = ?`),
+  getPendingInvitationByEmail: registryDb.prepare(`SELECT * FROM invitations WHERE email = ? AND accepted_at IS NULL`),
 } as const;

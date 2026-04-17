@@ -4,11 +4,18 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import rateLimit from 'express-rate-limit';
 import { registryStmts, parseUserProperties } from '../db/registry';
-import type { UserRow } from '../db/registry';
+import type { UserRow, InvitationRow } from '../db/registry';
 import { JWT_SECRET, JWT_EXPIRES_IN, requireAuth } from '../middleware/auth';
 import type { AuthPayload } from '@sovernote/types';
 
 export const authRouter = Router();
+
+// ---------------------------------------------------------------------------
+// Invitation gating
+// ---------------------------------------------------------------------------
+
+const REQUIRE_INVITATION = process.env.REQUIRE_INVITATION !== 'false';
+const INVITATION_TTL_MS = (Number(process.env.INVITATION_TTL_DAYS) || 7) * 24 * 60 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
 // Rate limiting — brute-force protection for auth endpoints
@@ -54,7 +61,7 @@ function setSessionCookie(res: Response, token: string): void {
 // POST /api/auth/register
 // ---------------------------------------------------------------------------
 authRouter.post('/register', authLimiter, async (req: Request, res: Response) => {
-  const { email, password, name } = req.body as AuthPayload & { name?: string };
+  const { email, password, name, invitationToken } = req.body as AuthPayload & { name?: string; invitationToken?: string };
 
   if (name !== undefined && (typeof name !== 'string' || name.trim().length > 100)) {
     res.status(400).json({ error: 'Name must not exceed 100 characters' });
@@ -71,6 +78,28 @@ authRouter.post('/register', authLimiter, async (req: Request, res: Response) =>
   if (Buffer.byteLength(password, 'utf8') > MAX_PASSWORD_BYTES) {
     res.status(400).json({ error: `Password must not exceed ${MAX_PASSWORD_BYTES} bytes` });
     return;
+  }
+
+  // Invitation token validation
+  let matchedInvitation: InvitationRow | undefined;
+  if (REQUIRE_INVITATION) {
+    if (!invitationToken || typeof invitationToken !== 'string') {
+      res.status(400).json({ error: 'Invitation token is required' });
+      return;
+    }
+    matchedInvitation = registryStmts.getInvitationByToken.get(invitationToken) as InvitationRow | undefined;
+    if (!matchedInvitation) {
+      res.status(400).json({ error: 'Invalid invitation token' });
+      return;
+    }
+    if (matchedInvitation.accepted_at != null) {
+      res.status(400).json({ error: 'Invitation already used' });
+      return;
+    }
+    if (matchedInvitation.created_at < Date.now() - INVITATION_TTL_MS) {
+      res.status(400).json({ error: 'Invitation has elapsed' });
+      return;
+    }
   }
 
   const normalizedEmail = email.trim().toLowerCase();
@@ -93,6 +122,11 @@ authRouter.post('/register', authLimiter, async (req: Request, res: Response) =>
     created_at: now,
     status: 'active',
   });
+
+  // Mark invitation as accepted
+  if (matchedInvitation) {
+    registryStmts.markInvitationAccepted.run(now, matchedInvitation.id);
+  }
 
   const token = jwt.sign({ sub: userId, email: normalizedEmail }, JWT_SECRET, {
     expiresIn: JWT_EXPIRES_IN,
