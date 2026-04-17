@@ -107,12 +107,29 @@ adminRouter.get('/users', (_req: Request, res: Response) => {
 
   const users = rows.map((row) => {
     let diskUsageBytes = 0;
-    const dbPath = path.join(DATA_DIR, 'users', `${row.id}.db`);
+
+    // Count user's SQLite DB + WAL/SHM files
+    for (const suffix of ['', '-wal', '-shm']) {
+      try {
+        diskUsageBytes += fs.statSync(path.join(DATA_DIR, 'users', `${row.id}.db${suffix}`)).size;
+      } catch {
+        // File doesn't exist — that's fine.
+      }
+    }
+
+    // Count uploaded files in DATA_DIR/uploads/<userId>/
+    const uploadsDir = path.join(DATA_DIR, 'uploads', row.id);
     try {
-      const stat = fs.statSync(dbPath);
-      diskUsageBytes = stat.size;
+      const files = fs.readdirSync(uploadsDir);
+      for (const file of files) {
+        try {
+          diskUsageBytes += fs.statSync(path.join(uploadsDir, file)).size;
+        } catch {
+          // Skip files we can't stat.
+        }
+      }
     } catch {
-      // File doesn't exist yet — user never created a document.
+      // Directory doesn't exist — user has no uploads.
     }
 
     let properties: Record<string, unknown> = {};
