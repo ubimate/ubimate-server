@@ -2,6 +2,8 @@ import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import path from 'path';
+import { createServer } from 'http';
+import { WebSocketServer } from 'ws';
 import { documentsRouter } from './routes/documents';
 import { uploadsRouter } from './routes/uploads';
 import { authRouter } from './routes/auth';
@@ -75,14 +77,40 @@ app.get('/uploads/*path', (_req, res) => {
   res.send(NO_IMAGE_SVG);
 });
 
-app.listen(API_PORT, () => {
-  console.log(`[api]   REST API listening on http://localhost:${API_PORT}`);
+// ---------------------------------------------------------------------------
+// SPA – serve the Vite build in production
+// ---------------------------------------------------------------------------
+
+if (process.env.NODE_ENV === 'production') {
+  const SPA_ROOT = path.join(__dirname, '../../web/dist');
+  app.use(express.static(SPA_ROOT));
+  // SPA fallback — any non-API, non-upload path serves index.html
+  app.get('*', (_req, res) => {
+    res.sendFile(path.join(SPA_ROOT, 'index.html'));
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Unified HTTP server – Express + Hocuspocus on a single port
+// ---------------------------------------------------------------------------
+
+const server = createServer(app);
+
+// Handle WebSocket upgrades for Hocuspocus (Yjs collaboration).
+// Client connects to: ws(s)://host:port/yjs/<documentName>
+const wss = new WebSocketServer({ noServer: true });
+
+server.on('upgrade', (request, socket, head) => {
+  if (request.url?.startsWith('/yjs')) {
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      hocuspocus.handleConnection(ws, request);
+    });
+  } else {
+    socket.destroy();
+  }
 });
 
-// ---------------------------------------------------------------------------
-// Hocuspocus – Yjs WebSocket server
-// ---------------------------------------------------------------------------
-
-hocuspocus.listen().then(() => {
-  console.log(`[yjs]   Hocuspocus WebSocket listening on ws://localhost:1234`);
+server.listen(API_PORT, () => {
+  console.log(`[app]   listening on http://localhost:${API_PORT}`);
+  console.log(`[app]   REST API at /api, WebSocket at /yjs`);
 });

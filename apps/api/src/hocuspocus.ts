@@ -66,10 +66,10 @@ function releaseLocksForUser(ydoc: Y.Doc, userId: string): void {
 
 export const hocuspocus = Server.configure({
   /**
-   * The WebSocket server listens on this port independently of Express.
-   * Frontend connects via:  new HocuspocusProvider({ url: 'ws://localhost:1234', name: documentId, token: jwtToken })
+   * No standalone port — Hocuspocus is mounted on the Express HTTP server
+   * via handleUpgrade in index.ts.  In development the client connects to
+   * ws://localhost:3001/yjs; in production to wss://sovernote.app/yjs.
    */
-  port: 1234,
 
   /**
    * Debounce onChange calls by 1 s (matching sovernote17's behaviour).
