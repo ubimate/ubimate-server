@@ -39,22 +39,31 @@ const app = express();
 // In development we allow any localhost / 127.0.0.1 / ::1 origin on any port
 // so Safari, Chrome, and Tauri webviews all work without extra config.
 const TAURI_ORIGINS = ['https://tauri.localhost', 'tauri://localhost'];
+
+function isLocalhostOrigin(origin: string): boolean {
+  try {
+    const url = new URL(origin);
+    return url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '::1';
+  } catch {
+    return false;
+  }
+}
+
 const corsOrigin: cors.CorsOptions['origin'] = process.env.CORS_ORIGIN
   ? (origin, callback) => {
       const allowed = process.env.CORS_ORIGIN!.split(',').map(s => s.trim());
-      if (!origin || allowed.includes(origin) || TAURI_ORIGINS.includes(origin)) return callback(null, true);
-      callback(new Error('Not allowed by CORS'));
+      // Allow: no-origin requests, explicit allow-list, Tauri origins, and
+      // localhost (needed for Tauri dev-mode which sends http://localhost:*).
+      if (!origin || allowed.includes(origin) || TAURI_ORIGINS.includes(origin) || isLocalhostOrigin(origin)) {
+        return callback(null, true);
+      }
+      callback(null, false);
     }
   : (origin, callback) => {
       // Allow requests with no origin (same-origin, Tauri, curl, etc.)
       if (!origin) return callback(null, true);
       if (TAURI_ORIGINS.includes(origin)) return callback(null, true);
-      const url = new URL(origin);
-      const isLocal =
-        url.hostname === 'localhost' ||
-        url.hostname === '127.0.0.1' ||
-        url.hostname === '::1';
-      callback(isLocal ? null : new Error('Not allowed by CORS'), isLocal);
+      callback(null, isLocalhostOrigin(origin));
     };
 
 app.use(cors({
