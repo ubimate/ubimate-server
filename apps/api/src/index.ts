@@ -33,14 +33,22 @@ const DATA_DIR = process.env.DATA_DIR ?? path.join(__dirname, '../data');
 
 const app = express();
 
-// In production set CORS_ORIGIN to the exact origin (e.g. https://app.sovernote.com).
+// In production set CORS_ORIGIN to the exact origin (e.g. https://sovernote.app)
+// or a comma-separated list (e.g. https://sovernote.app,http://localhost:5173).
+// Tauri desktop origins (https://tauri.localhost, tauri://localhost) are always allowed.
 // In development we allow any localhost / 127.0.0.1 / ::1 origin on any port
 // so Safari, Chrome, and Tauri webviews all work without extra config.
+const TAURI_ORIGINS = ['https://tauri.localhost', 'tauri://localhost'];
 const corsOrigin: cors.CorsOptions['origin'] = process.env.CORS_ORIGIN
-  ? process.env.CORS_ORIGIN
+  ? (origin, callback) => {
+      const allowed = process.env.CORS_ORIGIN!.split(',').map(s => s.trim());
+      if (!origin || allowed.includes(origin) || TAURI_ORIGINS.includes(origin)) return callback(null, true);
+      callback(new Error('Not allowed by CORS'));
+    }
   : (origin, callback) => {
       // Allow requests with no origin (same-origin, Tauri, curl, etc.)
       if (!origin) return callback(null, true);
+      if (TAURI_ORIGINS.includes(origin)) return callback(null, true);
       const url = new URL(origin);
       const isLocal =
         url.hostname === 'localhost' ||
