@@ -1,10 +1,21 @@
 import { Server, onLoadDocumentPayload, onChangePayload, onAuthenticatePayload, onConnectPayload, onDisconnectPayload } from '@hocuspocus/server';
 import * as Y from 'yjs';
 import jwt from 'jsonwebtoken';
+import { createHash } from 'crypto';
 import { COMPACT_THRESHOLD } from './db/database';
 import { getUserDb } from './db/userDb';
 import { JWT_SECRET } from './middleware/auth';
 import { broadcastTreeChanged } from './routes/documents';
+
+/**
+ * Compute the SHA-256 hex digest of a Yjs state vector.
+ * Used to fingerprint the CRDT state so the client can skip unchanged
+ * documents during sync (hash equality ⇒ identical CRDT state).
+ */
+function computeYjsSvHash(ydoc: Y.Doc): string {
+  const sv = Y.encodeStateVector(ydoc);
+  return createHash('sha256').update(sv).digest('hex');
+}
 
 /** Returns true when documentName is a block-registry document. */
 function isBlockRegistryDoc(documentName: string): boolean {
@@ -136,7 +147,8 @@ export const hocuspocus = Server.configure({
     const rowCount = userHandle.countYjsUpdates(documentName);
     if (rowCount >= COMPACT_THRESHOLD) {
       const snapshot = Y.encodeStateAsUpdate(document);
-      userHandle.compactYjsUpdates(documentName, snapshot);
+      const svHash = computeYjsSvHash(document);
+      userHandle.compactYjsUpdates(documentName, snapshot, svHash);
       console.log(
         `[yjs] Compacted "${documentName}" (${rowCount} rows → 1 snapshot)`
       );

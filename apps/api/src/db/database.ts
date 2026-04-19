@@ -32,6 +32,7 @@ export interface UserStmts {
   ensureBlockRegistryDocument: Statement;
   appendYjsUpdate: Statement;
   compactYjsUpdates: Statement;
+  updateYjsSvHash: Statement;
 }
 
 export interface UserDbHandle {
@@ -39,7 +40,7 @@ export interface UserDbHandle {
   stmts: UserStmts;
   getYjsUpdates(documentId: string): Buffer[];
   appendYjsUpdate(documentId: string, update: Uint8Array): void;
-  compactYjsUpdates(documentId: string, snapshot: Uint8Array): void;
+  compactYjsUpdates(documentId: string, snapshot: Uint8Array, yjsSvHash?: string | null): void;
   countYjsUpdates(documentId: string): number;
   /**
    * Traverse the parent chain for `documentId` and return the ID of the
@@ -265,6 +266,20 @@ const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    // Add yjs_sv_hash — SHA-256 of the Yjs state vector, used to skip unchanged
+    // documents during initial sync (hash match ⇒ identical CRDT state).
+    version: 9,
+    run: (db) => {
+      try {
+        db.exec(`ALTER TABLE documents ADD COLUMN yjs_sv_hash TEXT`);
+      } catch (err: unknown) {
+        if (err instanceof Error && err.message.includes('duplicate column name')) {
+          /* already present — skip */
+        } else { throw err; }
+      }
+    },
+  },
 ];
 
 function runMigrations(db: Database.Database): void {
@@ -319,14 +334,14 @@ export function initUserDb(dbPath: string): UserDbHandle {
   const stmts: UserStmts = {
     listDocuments: db.prepare(`
       SELECT id, parent_id, type, position, properties, created_at, updated_at, last_struct_ts,
-             status, status_timestamp, last_properties_ts
+             status, status_timestamp, last_properties_ts, yjs_sv_hash
       FROM documents
       WHERE type != 'block-registry'
       ORDER BY position ASC
     `),
     getDocument: db.prepare(`
       SELECT id, parent_id, type, position, properties, created_at, updated_at, last_struct_ts,
-             status, status_timestamp, last_properties_ts
+             status, status_timestamp, last_properties_ts, yjs_sv_hash
       FROM documents
       WHERE id = ?
     `),
@@ -423,6 +438,9 @@ export function initUserDb(dbPath: string): UserDbHandle {
     compactYjsUpdates: db.prepare(`
       DELETE FROM yjs_updates WHERE document_id = ?
     `),
+    updateYjsSvHash: db.prepare(`
+      UPDATE documents SET yjs_sv_hash = @yjs_sv_hash WHERE id = @id
+    `),
   };
 
   function getYjsUpdates(documentId: string): Buffer[] {
@@ -445,7 +463,7 @@ export function initUserDb(dbPath: string): UserDbHandle {
     })();
   }
 
-  function compactYjsUpdates(documentId: string, snapshot: Uint8Array): void {
+  function compactYjsUpdates(documentId: string, snapshot: Uint8Array, yjsSvHash?: string | null): void {
     db.transaction(() => {
       stmts.compactYjsUpdates.run(documentId);
       stmts.appendYjsUpdate.run({
@@ -453,6 +471,9 @@ export function initUserDb(dbPath: string): UserDbHandle {
         data: Buffer.from(snapshot),
         created_at: Date.now(),
       });
+      if (yjsSvHash !== undefined) {
+        stmts.updateYjsSvHash.run({ id: documentId, yjs_sv_hash: yjsSvHash });
+      }
     })();
   }
 

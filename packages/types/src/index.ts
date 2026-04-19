@@ -30,6 +30,13 @@ export interface Document {
   status: number;
   /** Unix epoch seconds; null when the document has never left the active state. */
   status_timestamp: number | null;
+  /**
+   * SHA-256 hex digest of the Yjs state vector (`Y.encodeStateVector(ydoc)`).
+   * Computed client-side on each Yjs persist; used to skip unchanged documents
+   * during initial Yjs sync (hash equality ⇒ identical CRDT state).
+   * null when no Yjs content has been persisted yet.
+   */
+  yjs_sv_hash?: string | null;
 }
 
 /** Payload for POST /api/documents */

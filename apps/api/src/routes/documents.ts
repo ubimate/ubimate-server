@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { randomUUID } from 'crypto';
+import { randomUUID, createHash } from 'crypto';
 import path from 'path';
 import fs from 'fs';
 import * as Y from 'yjs';
@@ -64,6 +64,7 @@ interface DocumentRow {
   last_properties_ts: number;
   status: number;
   status_timestamp: number | null;
+  yjs_sv_hash: string | null;
 }
 
 function toOut(row: DocumentRow): Document {
@@ -77,6 +78,7 @@ function toOut(row: DocumentRow): Document {
     updated_at: row.updated_at,
     status: row.status ?? 0,
     status_timestamp: row.status_timestamp ?? null,
+    yjs_sv_hash: row.yjs_sv_hash ?? null,
   };
 }
 
@@ -166,6 +168,7 @@ documentsRouter.post('/', (req: Request, res: Response) => {
     last_properties_ts: now,
     status: 0,
     status_timestamp: null,
+    yjs_sv_hash: null,
   };
 
   stmts.insertDocument.run(doc);
@@ -198,6 +201,7 @@ documentsRouter.put('/:id', (req: Request, res: Response) => {
     last_properties_ts: properties !== undefined ? Date.now() : existing.last_properties_ts,
     status: existing.status,
     status_timestamp: existing.status_timestamp,
+    yjs_sv_hash: existing.yjs_sv_hash,
   };
 
   stmts.updateDocument.run(updated);
@@ -249,6 +253,7 @@ documentsRouter.patch('/:id/reposition', (req: Request, res: Response) => {
     last_properties_ts: existing.last_properties_ts,
     status: existing.status,
     status_timestamp: existing.status_timestamp,
+    yjs_sv_hash: existing.yjs_sv_hash,
   };
 
   stmts.repositionDocument.run(updated);
@@ -638,7 +643,98 @@ documentsRouter.post('/:id/yjs', (req: Request, res: Response) => {
     const ydoc = new Y.Doc();
     for (const u of allUpdates) Y.applyUpdate(ydoc, u);
     const snapshot = Y.encodeStateAsUpdate(ydoc);
-    compactYjsUpdates(req.params.id, snapshot);
+    const svHash = createHash('sha256').update(Y.encodeStateVector(ydoc)).digest('hex');
+    compactYjsUpdates(req.params.id, snapshot, svHash);
+  }
+
+  return res.status(204).end();
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/documents/sync/yjs-check
+// Batch endpoint: accepts an array of { id, yjs_sv_hash } pairs from the
+// client, compares against the server's stored hashes, and returns the full
+// Yjs state (base64) only for documents whose hash doesn't match.
+//
+// Body: { docs: Array<{ id: string; yjs_sv_hash: string | null }> }
+// Response: { changed: Array<{ id: string; state: string | null; yjs_sv_hash: string | null }> }
+// ---------------------------------------------------------------------------
+documentsRouter.post('/sync/yjs-check', (req: Request, res: Response) => {
+  const { docs } = req.body as { docs?: Array<{ id: string; yjs_sv_hash: string | null }> };
+  if (!Array.isArray(docs)) {
+    return res.status(400).json({ error: 'docs array is required' });
+  }
+
+  const { getYjsUpdates, stmts } = req.userDbHandle;
+  const changed: Array<{ id: string; state: string | null; yjs_sv_hash: string | null }> = [];
+
+  for (const { id, yjs_sv_hash: clientHash } of docs) {
+    // Look up the server-side hash.
+    const row = stmts.getDocument.get(id) as DocumentRow | undefined;
+    const serverHash = row?.yjs_sv_hash ?? null;
+
+    // If both hashes exist and match, skip this document.
+    if (clientHash && serverHash && clientHash === serverHash) continue;
+
+    // Hashes differ (or one/both are null) — return the full server state.
+    const updates = getYjsUpdates(id);
+    if (updates.length === 0) {
+      changed.push({ id, state: null, yjs_sv_hash: serverHash });
+    } else {
+      const ydoc = new Y.Doc();
+      for (const u of updates) Y.applyUpdate(ydoc, u);
+      const state = Buffer.from(Y.encodeStateAsUpdate(ydoc)).toString('base64');
+      // Compute the hash now if the server didn't have one stored yet.
+      const hash = serverHash ?? createHash('sha256').update(Y.encodeStateVector(ydoc)).digest('hex');
+      changed.push({ id, state, yjs_sv_hash: hash });
+    }
+  }
+
+  return res.json({ changed });
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/documents/sync/yjs-push
+// Batch endpoint: accepts an array of Yjs deltas from the client and applies
+// them all to the server's Yjs store in one HTTP round-trip.
+//
+// Body: { updates: Array<{ id: string; update: string; yjs_sv_hash: string }> }
+//   - update: base64-encoded Yjs update binary
+//   - yjs_sv_hash: client-computed hash of the merged state (stored as-is)
+// ---------------------------------------------------------------------------
+documentsRouter.post('/sync/yjs-push', (req: Request, res: Response) => {
+  const { updates } = req.body as { updates?: Array<{ id: string; update: string; yjs_sv_hash?: string }> };
+  if (!Array.isArray(updates)) {
+    return res.status(400).json({ error: 'updates array is required' });
+  }
+
+  const { appendYjsUpdate, countYjsUpdates, compactYjsUpdates, getYjsUpdates } = req.userDbHandle;
+
+  for (const { id, update, yjs_sv_hash } of updates) {
+    if (typeof update !== 'string' || !update) continue;
+
+    let updateBytes: Buffer;
+    try {
+      updateBytes = Buffer.from(update, 'base64');
+    } catch {
+      continue; // skip malformed entry
+    }
+
+    appendYjsUpdate(id, updateBytes);
+
+    const rowCount = countYjsUpdates(id);
+    if (rowCount >= 50) {
+      const allUpdates = getYjsUpdates(id);
+      const ydoc = new Y.Doc();
+      for (const u of allUpdates) Y.applyUpdate(ydoc, u);
+      const snapshot = Y.encodeStateAsUpdate(ydoc);
+      const svHash = yjs_sv_hash ?? createHash('sha256').update(Y.encodeStateVector(ydoc)).digest('hex');
+      compactYjsUpdates(id, snapshot, svHash);
+    } else if (yjs_sv_hash) {
+      // Even when not compacting, update the stored hash so subsequent
+      // sync-check calls reflect the latest state.
+      req.userDbHandle.stmts.updateYjsSvHash.run({ id, yjs_sv_hash });
+    }
   }
 
   return res.status(204).end();
