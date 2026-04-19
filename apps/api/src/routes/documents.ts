@@ -681,7 +681,7 @@ documentsRouter.post('/sync/yjs-check', (req: Request, res: Response) => {
     // If both hashes exist and match, skip this document.
     if (clientHash && serverHash && clientHash === serverHash) continue;
 
-    // Hashes differ (or one/both are null) — return the full server state.
+    // Hashes differ (or one/both are null) — check deeper.
     const updates = getYjsUpdates(id);
     if (updates.length === 0) {
       // If client also has no content (null hash), nothing to sync — skip.
@@ -690,13 +690,17 @@ documentsRouter.post('/sync/yjs-check', (req: Request, res: Response) => {
     } else {
       const ydoc = new Y.Doc();
       for (const u of updates) Y.applyUpdate(ydoc, u);
-      const state = Buffer.from(Y.encodeStateAsUpdate(ydoc)).toString('base64');
-      // Compute the hash now if the server didn't have one stored yet.
+      // Compute the hash (cheap — state vector is tiny) before encoding
+      // the full state so we can bail out early when hashes match.
       const hash = serverHash ?? createHash('sha256').update(Y.encodeStateVector(ydoc)).digest('hex');
       // Persist the computed hash so future checks can skip this document.
       if (!serverHash) {
         stmts.updateYjsSvHash.run({ id, yjs_sv_hash: hash });
       }
+      // If the freshly computed hash matches the client hash, content is
+      // identical — skip this document entirely.
+      if (clientHash && hash === clientHash) continue;
+      const state = Buffer.from(Y.encodeStateAsUpdate(ydoc)).toString('base64');
       changed.push({ id, state, yjs_sv_hash: hash });
     }
   }
