@@ -20,7 +20,7 @@
   "devDependencies": {
     "@types/mudder": "2.1.3",
     "typescript": "5.9.3",
-    "vitest": "4.0.0"
+    "vitest": "^4.0.8"
   },
   "dependencies": {
     "mudder": "2.1.1"
