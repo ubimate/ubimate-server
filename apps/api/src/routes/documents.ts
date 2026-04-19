@@ -684,6 +684,8 @@ documentsRouter.post('/sync/yjs-check', (req: Request, res: Response) => {
     // Hashes differ (or one/both are null) — return the full server state.
     const updates = getYjsUpdates(id);
     if (updates.length === 0) {
+      // If client also has no content (null hash), nothing to sync — skip.
+      if (!clientHash) continue;
       changed.push({ id, state: null, yjs_sv_hash: serverHash });
     } else {
       const ydoc = new Y.Doc();

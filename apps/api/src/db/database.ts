@@ -460,6 +460,8 @@ export function initUserDb(dbPath: string): UserDbHandle {
         stmts.ensureDocument.run({ id: documentId, ts: now });
       }
       stmts.appendYjsUpdate.run({ document_id: documentId, data: Buffer.from(update), created_at: now });
+      // Invalidate the cached hash — new content makes the stored hash stale.
+      stmts.updateYjsSvHash.run({ id: documentId, yjs_sv_hash: null });
     })();
   }
 

@@ -168,6 +168,23 @@ describe('appendYjsUpdate', () => {
       .get() as { type: string };
     expect(row.type).toBe('folder');
   });
+
+  it('invalidates yjs_sv_hash when appending a new update', () => {
+    // Create doc and set a hash via compact
+    handle.appendYjsUpdate('page-hash', new Uint8Array([1, 2, 3]));
+    handle.compactYjsUpdates('page-hash', new Uint8Array([1, 2, 3]), 'abc123');
+    const before = handle.db
+      .prepare(`SELECT yjs_sv_hash FROM documents WHERE id = 'page-hash'`)
+      .get() as { yjs_sv_hash: string | null };
+    expect(before.yjs_sv_hash).toBe('abc123');
+
+    // Appending a new update should null out the hash
+    handle.appendYjsUpdate('page-hash', new Uint8Array([4, 5, 6]));
+    const after = handle.db
+      .prepare(`SELECT yjs_sv_hash FROM documents WHERE id = 'page-hash'`)
+      .get() as { yjs_sv_hash: string | null };
+    expect(after.yjs_sv_hash).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------
