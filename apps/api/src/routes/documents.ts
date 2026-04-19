@@ -631,20 +631,25 @@ documentsRouter.post('/:id/yjs', (req: Request, res: Response) => {
     return res.status(400).json({ error: 'update must be a valid base64 string' });
   }
 
-  const { appendYjsUpdate, countYjsUpdates, compactYjsUpdates, getYjsUpdates } = req.userDbHandle;
+  const { appendYjsUpdate, compactYjsUpdates, getYjsUpdates } = req.userDbHandle;
 
   // Append the incoming delta to the persistent store.
   appendYjsUpdate(req.params.id, updateBytes);
 
-  const rowCount = countYjsUpdates(req.params.id);
-  if (rowCount >= 50) {
+  // Always compute and store the hash so subsequent yjs-check calls can
+  // compare hashes and skip unchanged documents.  This endpoint is only
+  // called during sync (live editing goes through the Hocuspocus WebSocket).
+  const allUpdates = getYjsUpdates(req.params.id);
+  const ydoc = new Y.Doc();
+  for (const u of allUpdates) Y.applyUpdate(ydoc, u);
+  const svHash = createHash('sha256').update(Y.encodeStateVector(ydoc)).digest('hex');
+
+  if (allUpdates.length >= 50) {
     // Compact: merge all rows into a single snapshot.
-    const allUpdates = getYjsUpdates(req.params.id);
-    const ydoc = new Y.Doc();
-    for (const u of allUpdates) Y.applyUpdate(ydoc, u);
     const snapshot = Y.encodeStateAsUpdate(ydoc);
-    const svHash = createHash('sha256').update(Y.encodeStateVector(ydoc)).digest('hex');
     compactYjsUpdates(req.params.id, snapshot, svHash);
+  } else {
+    req.userDbHandle.stmts.updateYjsSvHash.run({ id: req.params.id, yjs_sv_hash: svHash });
   }
 
   return res.status(204).end();
@@ -686,6 +691,10 @@ documentsRouter.post('/sync/yjs-check', (req: Request, res: Response) => {
       const state = Buffer.from(Y.encodeStateAsUpdate(ydoc)).toString('base64');
       // Compute the hash now if the server didn't have one stored yet.
       const hash = serverHash ?? createHash('sha256').update(Y.encodeStateVector(ydoc)).digest('hex');
+      // Persist the computed hash so future checks can skip this document.
+      if (!serverHash) {
+        stmts.updateYjsSvHash.run({ id, yjs_sv_hash: hash });
+      }
       changed.push({ id, state, yjs_sv_hash: hash });
     }
   }
