@@ -144,14 +144,20 @@ export const hocuspocus = Server.configure({
       }
     }
 
+    const svHash = computeYjsSvHash(document);
     const rowCount = userHandle.countYjsUpdates(documentName);
     if (rowCount >= COMPACT_THRESHOLD) {
       const snapshot = Y.encodeStateAsUpdate(document);
-      const svHash = computeYjsSvHash(document);
       userHandle.compactYjsUpdates(documentName, snapshot, svHash);
       console.log(
         `[yjs] Compacted "${documentName}" (${rowCount} rows → 1 snapshot)`
       );
+    } else {
+      // Always update the stored hash so the next sync-check can skip
+      // unchanged documents.  Without this, appendYjsUpdate nulls the hash
+      // and it only gets restored on compaction — leaving most documents
+      // with a null server hash that forces a full sync on every app launch.
+      userHandle.stmts.updateYjsSvHash.run({ id: documentName, yjs_sv_hash: svHash });
     }
   },
 
