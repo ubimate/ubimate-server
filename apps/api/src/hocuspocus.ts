@@ -4,6 +4,7 @@ import jwt from 'jsonwebtoken';
 import { createHash } from 'crypto';
 import { COMPACT_THRESHOLD } from './db/database';
 import { getUserDb } from './db/userDb';
+import { registryStmts } from './db/registry';
 import { JWT_SECRET } from './middleware/auth';
 import { broadcastTreeChanged } from './routes/documents';
 
@@ -95,6 +96,12 @@ export const hocuspocus = Server.configure({
     if (!token) throw new Error('Authentication required');
     try {
       const payload = jwt.verify(token, JWT_SECRET) as { sub: string; email: string };
+      // Reject connections from users that don't exist in the registry.
+      // This prevents stale JWTs (e.g. from a previous test server) from
+      // authenticating against a fresh server instance.
+      if (!registryStmts.getUserById.get(payload.sub)) {
+        throw new Error('User not found');
+      }
       context.userId = payload.sub;
     } catch {
       throw new Error('Invalid or expired token');

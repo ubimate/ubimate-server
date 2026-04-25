@@ -21,10 +21,10 @@ const INVITATION_TTL_MS = (Number(process.env.INVITATION_TTL_DAYS) || 7) * 24 * 
 // Rate limiting — brute-force protection for auth endpoints
 // ---------------------------------------------------------------------------
 
-/** 10 attempts per 15 minutes per IP on login/register. */
+/** 10 attempts per 15 minutes per IP on login/register (production only). */
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  limit: 10,
+  limit: process.env.NODE_ENV === 'production' ? 10 : 1_000,
   standardHeaders: 'draft-8',
   legacyHeaders: false,
   message: { error: 'Too many attempts, please try again later' },
