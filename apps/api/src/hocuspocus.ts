@@ -6,7 +6,8 @@ import { COMPACT_THRESHOLD } from './db/database';
 import { getUserDb } from './db/userDb';
 import { registryStmts } from './db/registry';
 import { JWT_SECRET } from './middleware/auth';
-import { broadcastTreeChanged } from './routes/documents';
+// broadcastTreeChanged is no longer called from hocuspocus — properties
+// are pushed by the client via REST PUT, which triggers the broadcast there.
 
 /**
  * Compute the SHA-256 hex digest of a Yjs state vector.
@@ -18,51 +19,9 @@ function computeYjsSvHash(ydoc: Y.Doc): string {
   return createHash('sha256').update(sv).digest('hex');
 }
 
-/** Returns true when documentName is a block-registry document. */
-function isBlockRegistryDoc(documentName: string): boolean {
-  return documentName.startsWith('block-registry:');
-}
-
-/**
- * Walk the y-prosemirror XML fragment and clear every `lockedBy` node
- * attribute that belongs to `userId`.  Called server-side on disconnect so
- * abrupt client exits (CMD-Q, crash, network drop) don't leave blocks locked
- * until the 45-second TTL expires.
- */
-function releaseLocksForUser(ydoc: Y.Doc, userId: string): void {
-  const fragment = ydoc.getXmlFragment('prosemirror');
-  const toRelease: Y.XmlElement[] = [];
-
-  function walk(node: Y.XmlElement | Y.XmlFragment): void {
-    if (node instanceof Y.XmlElement) {
-      const raw = node.getAttribute('lockedBy');
-      if (typeof raw === 'string' && raw) {
-        try {
-          const lock = JSON.parse(raw) as { userId?: string };
-          if (lock?.userId === userId) {
-            toRelease.push(node);
-          }
-        } catch { /* not a valid lock json */ }
-      }
-    }
-    node.toArray().forEach((child) => {
-      if (child instanceof Y.XmlElement) walk(child);
-    });
-  }
-
-  walk(fragment);
-
-  if (toRelease.length > 0) {
-    ydoc.transact(() => {
-      for (const el of toRelease) {
-        el.removeAttribute('lockedBy');
-      }
-    });
-    console.log(
-      `[yjs] Released ${toRelease.length} lock(s) for user ${userId} on disconnect`,
-    );
-  }
-}
+// releaseLocksForUser has been removed: the server no longer inspects Yjs
+// document content (opaque-backend policy, see docs/OPAQUE-BACKEND.md).
+// Block locks are released by client-side TTL expiry instead.
 
 // ---------------------------------------------------------------------------
 // Hocuspocus server
@@ -127,29 +86,14 @@ export const hocuspocus = Server.configure({
 
   /**
    * Persist the incoming delta update to the user's SQLite database.
+   *
+   * The server is content-agnostic: it does NOT inspect named Yjs maps or
+   * fragments (opaque-backend policy, see docs/OPAQUE-BACKEND.md).  Document
+   * metadata (title, icon, etc.) is maintained exclusively via the REST API.
    */
   async onChange({ document, documentName, update, context }: onChangePayload) {
     const userHandle = getUserDb(context.userId as string);
     userHandle.appendYjsUpdate(documentName, update);
-
-    // Block-registry documents store Yjs state only — they have no properties
-    // column to sync back and do not affect the page tree broadcast.
-    // Block content is never inspected server-side (zero-knowledge encryption
-    // compatibility): all block-registry writes are handled by the client.
-    if (!isBlockRegistryDoc(documentName)) {
-      // Write-through: extract properties Y.Map and cache in the documents row.
-      const propsMap = document.getMap<unknown>('properties');
-      if (propsMap.size > 0) {
-        const props: Record<string, unknown> = {};
-        propsMap.forEach((v, k) => { props[k] = v; });
-        userHandle.stmts.updateDocumentProperties.run({
-          id: documentName,
-          properties: JSON.stringify(props),
-          updated_at: Date.now(),
-        });
-        broadcastTreeChanged(context.userId as string);
-      }
-    }
 
     const svHash = computeYjsSvHash(document);
     const rowCount = userHandle.countYjsUpdates(documentName);
@@ -172,25 +116,10 @@ export const hocuspocus = Server.configure({
     console.log(`[yjs] Client ${socketId} connected to "${documentName}"`);
   },
 
-  async onDisconnect({ documentName, socketId, document, context }: onDisconnectPayload) {
+  async onDisconnect({ documentName, socketId }: onDisconnectPayload) {
     console.log(`[yjs] Client ${socketId} disconnected from "${documentName}"`);
-
-    // Release any block locks held by the disconnecting user inside the
-    // ProseMirror XML fragment.  This fires for every disconnect (normal
-    // tab-close, CMD-Q, crash, network drop) so abrupt quits are covered
-    // even when the client never gets a chance to send an unlock update.
-    const userId = (context as { userId?: string })?.userId;
-    if (userId) {
-      releaseLocksForUser(document, userId);
-    }
-
-    // Legacy: clean up expired entries in the drawio-locks Yjs Map.
-    const DRAWIO_LOCK_TTL = 2 * 60 * 1000;
-    const locksMap = document.getMap('drawio-locks') as Y.Map<{ acquiredAt?: number }>;
-    locksMap.forEach((val, key) => {
-      if (val?.acquiredAt !== undefined && Date.now() - val.acquiredAt > DRAWIO_LOCK_TTL) {
-        locksMap.delete(key);
-      }
-    });
+    // Block lock release and drawio lock TTL cleanup have been removed:
+    // the server no longer reads Yjs document content (opaque-backend policy,
+    // see docs/OPAQUE-BACKEND.md). Stale locks expire via client-side TTL.
   },
 });
