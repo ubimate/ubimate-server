@@ -38,6 +38,13 @@ const authLimiter = rateLimit({
  * different passwords from being accepted as equal. */
 const MAX_PASSWORD_BYTES = 72;
 
+/** Lowercase SHA-256 hex digest length. */
+const SHA256_HEX_LEN = 64;
+
+function isSha256Hex(value: string): boolean {
+  return value.length === SHA256_HEX_LEN && /^[a-f0-9]+$/.test(value);
+}
+
 // Cookie name used for the session token.
 const SESSION_COOKIE = 'nf_session';
 
@@ -71,12 +78,12 @@ authRouter.post('/register', authLimiter, async (req: Request, res: Response) =>
     res.status(400).json({ error: 'Valid email is required' });
     return;
   }
-  if (!password || typeof password !== 'string' || password.length < 8) {
-    res.status(400).json({ error: 'Password must be at least 8 characters' });
+  if (!password || typeof password !== 'string' || !isSha256Hex(password)) {
+    res.status(400).json({ error: 'Password hash is required' });
     return;
   }
   if (Buffer.byteLength(password, 'utf8') > MAX_PASSWORD_BYTES) {
-    res.status(400).json({ error: `Password must not exceed ${MAX_PASSWORD_BYTES} bytes` });
+    res.status(400).json({ error: 'Invalid password hash size' });
     return;
   }
 
@@ -143,8 +150,12 @@ authRouter.post('/register', authLimiter, async (req: Request, res: Response) =>
 authRouter.post('/login', authLimiter, async (req: Request, res: Response) => {
   const { email, password } = req.body as AuthPayload;
 
-  if (!email || !password) {
-    res.status(400).json({ error: 'email and password are required' });
+  if (!email || !password || typeof password !== 'string') {
+    res.status(400).json({ error: 'email and password hash are required' });
+    return;
+  }
+  if (!isSha256Hex(password)) {
+    res.status(400).json({ error: 'Invalid password hash format' });
     return;
   }
 
@@ -183,8 +194,12 @@ authRouter.post('/login', authLimiter, async (req: Request, res: Response) => {
 authRouter.post('/login/token', authLimiter, async (req: Request, res: Response) => {
   const { email, password } = req.body as AuthPayload;
 
-  if (!email || !password) {
-    res.status(400).json({ error: 'email and password are required' });
+  if (!email || !password || typeof password !== 'string') {
+    res.status(400).json({ error: 'email and password hash are required' });
+    return;
+  }
+  if (!isSha256Hex(password)) {
+    res.status(400).json({ error: 'Invalid password hash format' });
     return;
   }
 
