@@ -41,6 +41,12 @@ if (!cols.includes('properties')) {
     }
   }
 }
+if (!cols.includes('public_key')) {
+  registryDb.exec(`ALTER TABLE users ADD COLUMN public_key TEXT`);
+}
+if (!cols.includes('wrapped_content_key')) {
+  registryDb.exec(`ALTER TABLE users ADD COLUMN wrapped_content_key TEXT`);
+}
 
 export interface UserRow {
   id: string;
@@ -50,6 +56,10 @@ export interface UserRow {
   password_hash: string;
   created_at: number;
   status: string;
+  /** Base64-encoded Ed25519 public key — null for pre-ZK accounts. */
+  public_key: string | null;
+  /** Base64-encoded sealed content key — null for pre-ZK accounts. */
+  wrapped_content_key: string | null;
 }
 
 /** Safely parse the properties JSON column. Returns an empty object on malformed data. */
@@ -88,11 +98,14 @@ export interface InvitationRow {
 
 export const registryStmts = {
   createUser: registryDb.prepare(`
-    INSERT INTO users (id, email, properties, password_hash, created_at, status)
-    VALUES (@id, @email, @properties, @password_hash, @created_at, @status)
+    INSERT INTO users (id, email, properties, password_hash, created_at, status, public_key, wrapped_content_key)
+    VALUES (@id, @email, @properties, @password_hash, @created_at, @status, @public_key, @wrapped_content_key)
   `),
   getUserByEmail: registryDb.prepare(`SELECT * FROM users WHERE email = ?`),
   getUserById: registryDb.prepare(`SELECT * FROM users WHERE id = ?`),
+  updateUserCryptoKeys: registryDb.prepare(`
+    UPDATE users SET public_key = @public_key, wrapped_content_key = @wrapped_content_key WHERE id = @id
+  `),
   deleteUser: registryDb.prepare(`DELETE FROM users WHERE id = ?`),
   listUsers: registryDb.prepare(`SELECT id, email, properties, status, created_at FROM users`),
 

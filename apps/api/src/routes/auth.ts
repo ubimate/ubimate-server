@@ -68,7 +68,12 @@ function setSessionCookie(res: Response, token: string): void {
 // POST /api/auth/register
 // ---------------------------------------------------------------------------
 authRouter.post('/register', authLimiter, async (req: Request, res: Response) => {
-  const { email, password, name, invitationToken } = req.body as AuthPayload & { name?: string; invitationToken?: string };
+  const { email, password, name, invitationToken, publicKey, wrappedContentKey } = req.body as AuthPayload & {
+    name?: string;
+    invitationToken?: string;
+    publicKey?: string;
+    wrappedContentKey?: string;
+  };
 
   if (name !== undefined && (typeof name !== 'string' || name.trim().length > 100)) {
     res.status(400).json({ error: 'Name must not exceed 100 characters' });
@@ -84,6 +89,15 @@ authRouter.post('/register', authLimiter, async (req: Request, res: Response) =>
   }
   if (Buffer.byteLength(password, 'utf8') > MAX_PASSWORD_BYTES) {
     res.status(400).json({ error: 'Invalid password hash size' });
+    return;
+  }
+
+  if (publicKey !== undefined && (typeof publicKey !== 'string' || publicKey.length === 0)) {
+    res.status(400).json({ error: 'publicKey must be a non-empty base64 string' });
+    return;
+  }
+  if (wrappedContentKey !== undefined && (typeof wrappedContentKey !== 'string' || wrappedContentKey.length === 0)) {
+    res.status(400).json({ error: 'wrappedContentKey must be a non-empty base64 string' });
     return;
   }
 
@@ -129,6 +143,8 @@ authRouter.post('/register', authLimiter, async (req: Request, res: Response) =>
     password_hash: passwordHash,
     created_at: now,
     status: 'active',
+    public_key: publicKey ?? null,
+    wrapped_content_key: wrappedContentKey ?? null,
   });
 
   // Mark invitation as accepted
@@ -141,7 +157,10 @@ authRouter.post('/register', authLimiter, async (req: Request, res: Response) =>
   });
 
   setSessionCookie(res, token);
-  res.status(201).json({ user: { id: userId, email: normalizedEmail, properties, created_at: now } });
+  res.status(201).json({
+    user: { id: userId, email: normalizedEmail, properties, created_at: now, public_key: publicKey ?? null },
+    wrapped_content_key: wrappedContentKey ?? null,
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -181,7 +200,10 @@ authRouter.post('/login', authLimiter, async (req: Request, res: Response) => {
   });
 
   setSessionCookie(res, token);
-  res.json({ user: { id: user.id, email: user.email, properties: parseUserProperties(user), created_at: user.created_at } });
+  res.json({
+    user: { id: user.id, email: user.email, properties: parseUserProperties(user), created_at: user.created_at, public_key: user.public_key ?? null },
+    wrapped_content_key: user.wrapped_content_key ?? null,
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -224,7 +246,8 @@ authRouter.post('/login/token', authLimiter, async (req: Request, res: Response)
   });
 
   res.json({
-    user: { id: user.id, email: user.email, properties: parseUserProperties(user), created_at: user.created_at },
+    user: { id: user.id, email: user.email, properties: parseUserProperties(user), created_at: user.created_at, public_key: user.public_key ?? null },
+    wrapped_content_key: user.wrapped_content_key ?? null,
     token,
   });
 });
@@ -246,7 +269,10 @@ authRouter.get('/me', requireAuth, (req: Request, res: Response) => {
     res.status(401).json({ error: 'User not found' });
     return;
   }
-  res.json({ id: user.id, email: user.email, properties: parseUserProperties(user), created_at: user.created_at });
+  res.json({
+    user: { id: user.id, email: user.email, properties: parseUserProperties(user), created_at: user.created_at, public_key: user.public_key ?? null },
+    wrapped_content_key: user.wrapped_content_key ?? null,
+  });
 });
 
 // ---------------------------------------------------------------------------

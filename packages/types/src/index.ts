@@ -141,6 +141,8 @@ export interface User {
   /** Extensible user properties (name, avatar, etc.). Will be encrypted at rest in future. */
   properties: Record<string, unknown>;
   created_at: number; // Unix ms
+  /** Base64-encoded Ed25519 public key. Null for pre-ZK accounts. */
+  public_key: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -237,4 +239,10 @@ export interface AuthPayload {
 /** Response of POST /api/auth/register and POST /api/auth/login */
 export interface AuthResponse {
   user: User;
+  /**
+   * Base64-encoded sealed content key — nonce || ciphertext wrapped with the
+   * user's X25519 public key via crypto_box_seal. Only present for ZK-enabled
+   * accounts; null for pre-ZK accounts.
+   */
+  wrapped_content_key: string | null;
 }
