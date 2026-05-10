@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import * as Y from 'yjs';
 import { initUserDb } from '../db/database';
 import type { UserDbHandle } from '../db/database';
 
@@ -184,6 +185,42 @@ describe('appendYjsUpdate', () => {
       .prepare(`SELECT yjs_sv_hash FROM documents WHERE id = 'page-hash'`)
       .get() as { yjs_sv_hash: string | null };
     expect(after.yjs_sv_hash).toBeNull();
+  });
+
+  it('stores encrypted Yjs update bytes at rest in yjs_updates', () => {
+    const ydoc = new Y.Doc();
+    const text = ydoc.getText('default');
+    text.insert(0, 'hello-yjs');
+    const update = Y.encodeStateAsUpdate(ydoc);
+
+    handle.appendYjsUpdate('page-at-rest', update);
+
+    const row = handle.db
+      .prepare('SELECT data FROM yjs_updates WHERE document_id = ? ORDER BY id DESC LIMIT 1')
+      .get('page-at-rest') as { data: Buffer } | undefined;
+
+    expect(row).toBeDefined();
+    // At-rest bytes must not equal the raw Yjs update.
+    expect(row?.data.equals(Buffer.from(update))).toBe(false);
+    // Read path returns decrypted update bytes.
+    const readBack = handle.getYjsUpdates('page-at-rest');
+    expect(readBack).toHaveLength(1);
+    expect(readBack[0]).toEqual(Buffer.from(update));
+  });
+
+  it('rejects plaintext yjs rows that are not encrypted', () => {
+    const legacy = Buffer.from([1, 2, 3, 4, 5]);
+    handle.db
+      .prepare(
+        `INSERT INTO documents (id, type, position, properties, created_at, updated_at)
+         VALUES (?, 'page', '0', '{}', ?, ?)`,
+      )
+      .run('legacy-page', Date.now(), Date.now());
+    handle.db
+      .prepare('INSERT INTO yjs_updates (document_id, data, created_at) VALUES (?, ?, ?)')
+      .run('legacy-page', legacy, Date.now());
+
+    expect(() => handle.getYjsUpdates('legacy-page')).toThrow('Invalid encrypted Yjs row');
   });
 });
 

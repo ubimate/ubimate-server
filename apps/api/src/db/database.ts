@@ -1,11 +1,65 @@
 import Database from 'better-sqlite3';
 import type { Statement } from 'better-sqlite3';
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'crypto';
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
 export const COMPACT_THRESHOLD = 100;
+
+const YJS_DB_ENCRYPTION_MAGIC = Buffer.from('SYE1');
+const YJS_DB_ENCRYPTION_IV_BYTES = 12;
+const YJS_DB_ENCRYPTION_TAG_BYTES = 16;
+
+function deriveYjsDbEncryptionKey(): Buffer {
+  const explicit = process.env.YJS_DB_ENCRYPTION_KEY;
+  if (explicit && explicit.trim().length > 0) {
+    return createHash('sha256').update(explicit).digest();
+  }
+
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('YJS_DB_ENCRYPTION_KEY environment variable must be set in production');
+  }
+
+  // Dev/test fallback for convenience in local runs.
+  console.warn('[yjs-db] YJS_DB_ENCRYPTION_KEY not set — deriving from JWT_SECRET (dev/test only)');
+  const material = process.env.JWT_SECRET ?? 'sovernote-dev-secret-change-in-production';
+  return createHash('sha256').update(material).digest();
+}
+
+const YJS_DB_ENCRYPTION_KEY = deriveYjsDbEncryptionKey();
+
+function encryptYjsUpdateForStorage(plaintext: Uint8Array): Buffer {
+  const iv = randomBytes(YJS_DB_ENCRYPTION_IV_BYTES);
+  const cipher = createCipheriv('aes-256-gcm', YJS_DB_ENCRYPTION_KEY, iv);
+  const ciphertext = Buffer.concat([cipher.update(Buffer.from(plaintext)), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return Buffer.concat([YJS_DB_ENCRYPTION_MAGIC, iv, tag, ciphertext]);
+}
+
+function decryptYjsUpdateFromStorage(stored: Buffer): Buffer {
+  const minLength =
+    YJS_DB_ENCRYPTION_MAGIC.length + YJS_DB_ENCRYPTION_IV_BYTES + YJS_DB_ENCRYPTION_TAG_BYTES;
+  if (stored.length < minLength) {
+    throw new Error('Invalid encrypted Yjs row: payload too short');
+  }
+  if (!stored.subarray(0, YJS_DB_ENCRYPTION_MAGIC.length).equals(YJS_DB_ENCRYPTION_MAGIC)) {
+    throw new Error('Invalid encrypted Yjs row: missing header');
+  }
+
+  const ivStart = YJS_DB_ENCRYPTION_MAGIC.length;
+  const ivEnd = ivStart + YJS_DB_ENCRYPTION_IV_BYTES;
+  const tagEnd = ivEnd + YJS_DB_ENCRYPTION_TAG_BYTES;
+
+  const iv = stored.subarray(ivStart, ivEnd);
+  const tag = stored.subarray(ivEnd, tagEnd);
+  const ciphertext = stored.subarray(tagEnd);
+
+  const decipher = createDecipheriv('aes-256-gcm', YJS_DB_ENCRYPTION_KEY, iv);
+  decipher.setAuthTag(tag);
+  return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -445,7 +499,7 @@ export function initUserDb(dbPath: string): UserDbHandle {
 
   function getYjsUpdates(documentId: string): Buffer[] {
     const rows = stmts.getYjsUpdates.all(documentId) as { data: Buffer }[];
-    return rows.map((r) => r.data);
+    return rows.map((r) => decryptYjsUpdateFromStorage(r.data));
   }
 
   function appendYjsUpdate(documentId: string, update: Uint8Array): void {
@@ -459,7 +513,11 @@ export function initUserDb(dbPath: string): UserDbHandle {
       } else {
         stmts.ensureDocument.run({ id: documentId, ts: now });
       }
-      stmts.appendYjsUpdate.run({ document_id: documentId, data: Buffer.from(update), created_at: now });
+      stmts.appendYjsUpdate.run({
+        document_id: documentId,
+        data: encryptYjsUpdateForStorage(update),
+        created_at: now,
+      });
       // Invalidate the cached hash — new content makes the stored hash stale.
       stmts.updateYjsSvHash.run({ id: documentId, yjs_sv_hash: null });
     })();
@@ -470,7 +528,7 @@ export function initUserDb(dbPath: string): UserDbHandle {
       stmts.compactYjsUpdates.run(documentId);
       stmts.appendYjsUpdate.run({
         document_id: documentId,
-        data: Buffer.from(snapshot),
+        data: encryptYjsUpdateForStorage(snapshot),
         created_at: Date.now(),
       });
       if (yjsSvHash !== undefined) {
