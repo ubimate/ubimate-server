@@ -121,3 +121,8 @@ export const registryStmts = {
   deleteInvitation: registryDb.prepare(`DELETE FROM invitations WHERE id = ?`),
   getPendingInvitationByEmail: registryDb.prepare(`SELECT * FROM invitations WHERE email = ? AND accepted_at IS NULL`),
 } as const;
+
+/** Close the shared registry DB. Intended for tests that load the module in isolation. */
+export function closeRegistryDb(): void {
+  registryDb.close();
+}
