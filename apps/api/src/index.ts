@@ -118,11 +118,34 @@ const server = createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 
 server.on('upgrade', (request, socket, head) => {
+  const origin = request.headers.origin ?? 'unknown-origin';
+  const userAgent = request.headers['user-agent'] ?? 'unknown-ua';
+  const wsUrl = request.url ?? 'unknown-url';
+
   if (request.url?.startsWith('/yjs')) {
     wss.handleUpgrade(request, socket, head, (ws) => {
+      // Surface WS-level failures with request metadata so malformed clients
+      // are easier to identify from logs.
+      ws.on('error', (err) => {
+        console.warn(
+          `[yjs] websocket error url=${wsUrl} origin=${origin} ua=${userAgent}:`,
+          err,
+        );
+      });
+      ws.on('close', (code, reason) => {
+        if (code !== 1000) {
+          const reasonText = reason.length > 0 ? reason.toString('utf8') : 'no-reason';
+          console.warn(
+            `[yjs] websocket closed abnormally code=${code} reason=${reasonText} url=${wsUrl} origin=${origin} ua=${userAgent}`,
+          );
+        }
+      });
       hocuspocus.handleConnection(ws, request);
     });
   } else {
+    console.warn(
+      `[yjs] rejected websocket upgrade url=${wsUrl} origin=${origin} ua=${userAgent}`,
+    );
     socket.destroy();
   }
 });
