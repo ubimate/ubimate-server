@@ -1,8 +1,9 @@
 import { Router, Request, Response } from 'express';
-import { randomUUID } from 'crypto';
+import { randomUUID, randomBytes } from 'crypto';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import rateLimit from 'express-rate-limit';
+import { ed25519 } from '@noble/curves/ed25519.js';
 import { registryStmts, parseUserProperties } from '../db/registry';
 import type { UserRow, InvitationRow } from '../db/registry';
 import { JWT_SECRET, JWT_EXPIRES_IN, requireAuth } from '../middleware/auth';
@@ -29,6 +30,33 @@ const authLimiter = rateLimit({
   legacyHeaders: false,
   message: { error: 'Too many attempts, please try again later' },
 });
+
+// ---------------------------------------------------------------------------
+// Challenge-response nonce store (in-memory, ZK auth)
+// ---------------------------------------------------------------------------
+
+/** TTL for a one-time nonce: 30 seconds. */
+const NONCE_TTL_MS = 30_000;
+
+interface NonceEntry {
+  /** 64-char lowercase hex (32 random bytes). */
+  nonce: string;
+  /** Unix ms expiry. */
+  expiresAt: number;
+  /** Consumed on first verification attempt (prevents replay within the TTL window). */
+  consumed: boolean;
+}
+
+/** Keyed by normalised email. */
+const nonceStore = new Map<string, NonceEntry>();
+
+/** Remove entries whose TTL has elapsed. Called lazily before every store write. */
+function cleanupNonces(): void {
+  const now = Date.now();
+  for (const [email, entry] of nonceStore.entries()) {
+    if (entry.expiresAt < now) nonceStore.delete(email);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -63,6 +91,32 @@ const SEVEN_DAYS_S = 7 * 24 * 60 * 60;
 function setSessionCookie(res: Response, token: string): void {
   res.cookie(SESSION_COOKIE, token, { ...COOKIE_BASE, maxAge: SEVEN_DAYS_S * 1000 });
 }
+
+// ---------------------------------------------------------------------------
+// GET /api/auth/challenge — issue a single-use nonce for Ed25519 sign-in
+// ---------------------------------------------------------------------------
+authRouter.get('/challenge', authLimiter, (req: Request, res: Response) => {
+  const email = req.query['email'];
+  if (!email || typeof email !== 'string' || !email.includes('@')) {
+    res.status(400).json({ error: 'Valid email is required' });
+    return;
+  }
+
+  cleanupNonces();
+
+  const normalizedEmail = email.trim().toLowerCase();
+  const nonce = randomBytes(32).toString('hex');
+  const expiresAt = Date.now() + NONCE_TTL_MS;
+  nonceStore.set(normalizedEmail, { nonce, expiresAt, consumed: false });
+
+  // Indicate whether the account has ZK keys registered. Returns false for
+  // both non-existent users and legacy (pre-ZK) users so the client can fall
+  // back to the password-hash path without leaking account existence.
+  const user = registryStmts.getUserByEmail.get(normalizedEmail) as UserRow | undefined;
+  const hasZkKeys = !!(user?.public_key);
+
+  res.json({ nonce, expires_at: expiresAt, has_zk_keys: hasZkKeys });
+});
 
 // ---------------------------------------------------------------------------
 // POST /api/auth/register
@@ -165,11 +219,88 @@ authRouter.post('/register', authLimiter, async (req: Request, res: Response) =>
 
 // ---------------------------------------------------------------------------
 // POST /api/auth/login
+//
+// Supports two authentication paths:
+//   ZK path    (for accounts with a registered Ed25519 public key):
+//              { email, nonce, signature }  — signature is base64(Ed25519.sign(nonce_utf8, sk))
+//   Legacy path (for pre-ZK accounts where public_key IS NULL):
+//              { email, password }          — password is a lowercase SHA-256 hex digest
 // ---------------------------------------------------------------------------
 authRouter.post('/login', authLimiter, async (req: Request, res: Response) => {
-  const { email, password } = req.body as AuthPayload;
+  const { email, signature, nonce: clientNonce, password } = req.body as {
+    email?: string;
+    signature?: string;
+    nonce?: string;
+    password?: string;
+  };
 
-  if (!email || !password || typeof password !== 'string') {
+  if (!email || typeof email !== 'string') {
+    res.status(400).json({ error: 'email is required' });
+    return;
+  }
+  const normalizedEmail = email.trim().toLowerCase();
+
+  // ── ZK path ──────────────────────────────────────────────────────────────
+  if (signature !== undefined) {
+    if (!clientNonce || typeof clientNonce !== 'string' || typeof signature !== 'string') {
+      res.status(400).json({ error: 'nonce and signature are required for ZK login' });
+      return;
+    }
+
+    const user = registryStmts.getUserByEmail.get(normalizedEmail) as UserRow | undefined;
+
+    // Respond with the same error regardless of whether the user exists or has
+    // no public key, to avoid leaking account state.
+    if (!user || !user.public_key) {
+      res.status(401).json({ error: 'Invalid credentials' });
+      return;
+    }
+
+    // Consume nonce (single-use; consumed even on signature failure to prevent
+    // an attacker from iterating signatures within the TTL window — rate
+    // limiting provides the remaining brute-force protection).
+    const stored = nonceStore.get(normalizedEmail);
+    if (!stored || stored.consumed || stored.expiresAt < Date.now() || stored.nonce !== clientNonce) {
+      res.status(401).json({ error: 'Invalid or expired nonce' });
+      return;
+    }
+    stored.consumed = true;
+
+    // Verify Ed25519 signature.  The client signs the UTF-8 bytes of the nonce
+    // hex string using libsodium crypto_sign_detached (standard RFC 8032 Ed25519).
+    let valid = false;
+    try {
+      const sigBytes = Buffer.from(signature, 'base64');
+      const pubKeyBytes = Buffer.from(user.public_key, 'base64');
+      const msgBytes = Buffer.from(clientNonce, 'utf8');
+      valid = ed25519.verify(sigBytes, msgBytes, pubKeyBytes);
+    } catch {
+      valid = false;
+    }
+
+    if (!valid) {
+      res.status(401).json({ error: 'Invalid credentials' });
+      return;
+    }
+
+    if (user.status !== 'active') {
+      res.status(403).json({ error: 'Account is not active' });
+      return;
+    }
+
+    const token = jwt.sign({ sub: user.id, email: user.email }, JWT_SECRET, {
+      expiresIn: JWT_EXPIRES_IN,
+    });
+    setSessionCookie(res, token);
+    res.json({
+      user: { id: user.id, email: user.email, properties: parseUserProperties(user), created_at: user.created_at, public_key: user.public_key },
+      wrapped_content_key: user.wrapped_content_key ?? null,
+    });
+    return;
+  }
+
+  // ── Legacy path (bcrypt) — only for accounts without an Ed25519 public key ──
+  if (!password || typeof password !== 'string') {
     res.status(400).json({ error: 'email and password hash are required' });
     return;
   }
@@ -178,7 +309,6 @@ authRouter.post('/login', authLimiter, async (req: Request, res: Response) => {
     return;
   }
 
-  const normalizedEmail = email.trim().toLowerCase();
   const user = registryStmts.getUserByEmail.get(normalizedEmail) as UserRow | undefined;
 
   // Use a constant-time comparison path to avoid user-enumeration via timing.
@@ -209,14 +339,78 @@ authRouter.post('/login', authLimiter, async (req: Request, res: Response) => {
 // ---------------------------------------------------------------------------
 // POST /api/auth/login/token — for Tauri / API clients
 //
-// Same validation logic as /login but returns the JWT in the response body
+// Same dual-path logic as /login but returns the JWT in the response body
 // instead of setting an HttpOnly cookie.  Used by the Tauri desktop app,
 // which cannot rely on the WebView cookie jar for cross-origin requests.
 // ---------------------------------------------------------------------------
 authRouter.post('/login/token', authLimiter, async (req: Request, res: Response) => {
-  const { email, password } = req.body as AuthPayload;
+  const { email, signature, nonce: clientNonce, password } = req.body as {
+    email?: string;
+    signature?: string;
+    nonce?: string;
+    password?: string;
+  };
 
-  if (!email || !password || typeof password !== 'string') {
+  if (!email || typeof email !== 'string') {
+    res.status(400).json({ error: 'email is required' });
+    return;
+  }
+  const normalizedEmail = email.trim().toLowerCase();
+
+  // ── ZK path ──────────────────────────────────────────────────────────────
+  if (signature !== undefined) {
+    if (!clientNonce || typeof clientNonce !== 'string' || typeof signature !== 'string') {
+      res.status(400).json({ error: 'nonce and signature are required for ZK login' });
+      return;
+    }
+
+    const user = registryStmts.getUserByEmail.get(normalizedEmail) as UserRow | undefined;
+
+    if (!user || !user.public_key) {
+      res.status(401).json({ error: 'Invalid credentials' });
+      return;
+    }
+
+    const stored = nonceStore.get(normalizedEmail);
+    if (!stored || stored.consumed || stored.expiresAt < Date.now() || stored.nonce !== clientNonce) {
+      res.status(401).json({ error: 'Invalid or expired nonce' });
+      return;
+    }
+    stored.consumed = true;
+
+    let valid = false;
+    try {
+      const sigBytes = Buffer.from(signature, 'base64');
+      const pubKeyBytes = Buffer.from(user.public_key, 'base64');
+      const msgBytes = Buffer.from(clientNonce, 'utf8');
+      valid = ed25519.verify(sigBytes, msgBytes, pubKeyBytes);
+    } catch {
+      valid = false;
+    }
+
+    if (!valid) {
+      res.status(401).json({ error: 'Invalid credentials' });
+      return;
+    }
+
+    if (user.status !== 'active') {
+      res.status(403).json({ error: 'Account is not active' });
+      return;
+    }
+
+    const token = jwt.sign({ sub: user.id, email: user.email }, JWT_SECRET, {
+      expiresIn: JWT_EXPIRES_IN,
+    });
+    res.json({
+      user: { id: user.id, email: user.email, properties: parseUserProperties(user), created_at: user.created_at, public_key: user.public_key },
+      wrapped_content_key: user.wrapped_content_key ?? null,
+      token,
+    });
+    return;
+  }
+
+  // ── Legacy path (bcrypt) ─────────────────────────────────────────────────
+  if (!password || typeof password !== 'string') {
     res.status(400).json({ error: 'email and password hash are required' });
     return;
   }
@@ -225,7 +419,6 @@ authRouter.post('/login/token', authLimiter, async (req: Request, res: Response)
     return;
   }
 
-  const normalizedEmail = email.trim().toLowerCase();
   const user = registryStmts.getUserByEmail.get(normalizedEmail) as UserRow | undefined;
 
   const passwordHash = user?.password_hash ?? '$2a$12$invalidhashfortimingnormalization';
