@@ -4,6 +4,7 @@ import jwt from 'jsonwebtoken';
 import rateLimit from 'express-rate-limit';
 import path from 'path';
 import fs from 'fs';
+import { ed25519 } from '@noble/curves/ed25519.js';
 import { JWT_SECRET } from '../middleware/auth';
 import {
   requireAdminConfigured,
@@ -42,7 +43,8 @@ const adminLoginLimiter = rateLimit({
 
 function computeInvitationStatus(row: InvitationRow): 'accepted' | 'elapsed' | 'pending' {
   if (row.accepted_at != null) return 'accepted';
-  if (row.created_at < Date.now() - INVITATION_TTL_MS) return 'elapsed';
+  const expiredAt = row.expires_at ?? (row.created_at + INVITATION_TTL_MS);
+  if (Date.now() > expiredAt) return 'elapsed';
   return 'pending';
 }
 
@@ -189,14 +191,68 @@ adminRouter.get('/invitations', (_req: Request, res: Response) => {
 // POST /api/admin/invitations
 // ---------------------------------------------------------------------------
 adminRouter.post('/invitations', async (req: Request, res: Response) => {
-  const { email } = req.body as { email?: string };
+  const {
+    email,
+    token: clientToken,
+    expires_at: clientExpiresAt,
+    sender_signature,
+    sender_public_key,
+  } = req.body as {
+    email?: string;
+    token?: string;
+    expires_at?: number;
+    sender_signature?: string;
+    sender_public_key?: string;
+  };
 
   if (!email || typeof email !== 'string' || !email.includes('@')) {
     res.status(400).json({ error: 'A valid email address is required' });
     return;
   }
 
+  // Validate optional token (64 hex chars = 32 bytes)
+  if (clientToken !== undefined && !/^[0-9a-f]{64}$/.test(clientToken)) {
+    res.status(400).json({ error: 'token must be a 64-character hex string' });
+    return;
+  }
+
+  // Validate optional expires_at
+  if (clientExpiresAt !== undefined && (typeof clientExpiresAt !== 'number' || !Number.isFinite(clientExpiresAt))) {
+    res.status(400).json({ error: 'expires_at must be a numeric timestamp' });
+    return;
+  }
+
   const normalizedEmail = email.trim().toLowerCase();
+  const now = Date.now();
+  const token = clientToken ?? randomBytes(32).toString('hex');
+  const expiresAt = (typeof clientExpiresAt === 'number') ? clientExpiresAt : (now + INVITATION_TTL_MS);
+
+  // If a sender signature is provided, verify it against the sender public key.
+  let verifiedSenderPublicKey: string | null = null;
+  let verifiedSenderSignature: string | null = null;
+  if (sender_signature !== undefined || sender_public_key !== undefined) {
+    if (typeof sender_signature !== 'string' || typeof sender_public_key !== 'string') {
+      res.status(400).json({ error: 'sender_signature and sender_public_key must both be provided together' });
+      return;
+    }
+    try {
+      const pubKeyBytes = Uint8Array.from(atob(sender_public_key), (c) => c.charCodeAt(0));
+      const sigBytes = Uint8Array.from(atob(sender_signature), (c) => c.charCodeAt(0));
+      const msgBytes = new TextEncoder().encode(
+        `sovernote_invite:${token}:${normalizedEmail}:${expiresAt}`,
+      );
+      const valid = ed25519.verify(sigBytes, msgBytes, pubKeyBytes);
+      if (!valid) {
+        res.status(400).json({ error: 'Invalid sender_signature' });
+        return;
+      }
+      verifiedSenderPublicKey = sender_public_key;
+      verifiedSenderSignature = sender_signature;
+    } catch {
+      res.status(400).json({ error: 'Malformed sender_signature or sender_public_key' });
+      return;
+    }
+  }
 
   // Check for existing pending invitation for this email
   const existing = registryStmts.getPendingInvitationByEmail.get(normalizedEmail) as InvitationRow | undefined;
@@ -206,10 +262,16 @@ adminRouter.post('/invitations', async (req: Request, res: Response) => {
   }
 
   const id = randomUUID();
-  const token = randomBytes(32).toString('hex');
-  const now = Date.now();
 
-  registryStmts.insertInvitation.run({ id, token, email: normalizedEmail, created_at: now });
+  registryStmts.insertInvitation.run({
+    id,
+    token,
+    email: normalizedEmail,
+    created_at: now,
+    expires_at: expiresAt,
+    sender_public_key: verifiedSenderPublicKey,
+    sender_signature: verifiedSenderSignature,
+  });
 
   // Attempt to send email; don't fail the request if email sending fails
   let emailSent = false;

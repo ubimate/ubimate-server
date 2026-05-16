@@ -168,7 +168,9 @@ authRouter.post('/register', authLimiter, async (req: Request, res: Response) =>
         res.status(400).json({ error: 'Invitation already used' });
         return;
       }
-      if (matchedInvitation.created_at < Date.now() - INVITATION_TTL_MS) {
+      // Prefer explicit expires_at; fall back to legacy created_at + TTL check.
+      const expiredAt = matchedInvitation.expires_at ?? (matchedInvitation.created_at + INVITATION_TTL_MS);
+      if (Date.now() > expiredAt) {
         res.status(400).json({ error: 'Invitation has elapsed' });
         return;
       }
@@ -214,6 +216,15 @@ authRouter.post('/register', authLimiter, async (req: Request, res: Response) =>
   res.status(201).json({
     user: { id: userId, email: normalizedEmail, properties, created_at: now, public_key: publicKey ?? null },
     wrapped_content_key: wrappedContentKey ?? null,
+    ...(matchedInvitation?.sender_public_key && matchedInvitation?.sender_signature
+      ? {
+          invitation: {
+            sender_public_key: matchedInvitation.sender_public_key,
+            sender_signature: matchedInvitation.sender_signature,
+            expires_at: matchedInvitation.expires_at,
+          },
+        }
+      : {}),
   });
 });
 

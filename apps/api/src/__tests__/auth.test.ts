@@ -66,6 +66,9 @@ describe('auth router', () => {
       token: 'invite-token-123',
       email: invitationEmail,
       created_at: Date.now(),
+      expires_at: Date.now() + 7 * 24 * 60 * 60 * 1000,
+      sender_public_key: null,
+      sender_signature: null,
     });
 
     // Store the close helper on the server object so afterEach can use it after the dynamic import.

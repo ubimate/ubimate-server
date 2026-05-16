@@ -88,12 +88,29 @@ registryDb.exec(`
   CREATE UNIQUE INDEX IF NOT EXISTS idx_invitations_token ON invitations(token);
 `);
 
+// Migrations — add ZK #5 columns if they do not already exist.
+{
+  const cols = (registryDb.pragma('table_info(invitations)') as { name: string }[]).map((c) => c.name);
+  if (!cols.includes('expires_at')) {
+    registryDb.exec(`ALTER TABLE invitations ADD COLUMN expires_at INTEGER`);
+  }
+  if (!cols.includes('sender_public_key')) {
+    registryDb.exec(`ALTER TABLE invitations ADD COLUMN sender_public_key TEXT`);
+  }
+  if (!cols.includes('sender_signature')) {
+    registryDb.exec(`ALTER TABLE invitations ADD COLUMN sender_signature TEXT`);
+  }
+}
+
 export interface InvitationRow {
   id: string;
   token: string;
   email: string;
   created_at: number;
   accepted_at: number | null;
+  expires_at: number | null;
+  sender_public_key: string | null;
+  sender_signature: string | null;
 }
 
 export const registryStmts = {
@@ -111,8 +128,8 @@ export const registryStmts = {
 
   // Invitations
   insertInvitation: registryDb.prepare(`
-    INSERT INTO invitations (id, token, email, created_at)
-    VALUES (@id, @token, @email, @created_at)
+    INSERT INTO invitations (id, token, email, created_at, expires_at, sender_public_key, sender_signature)
+    VALUES (@id, @token, @email, @created_at, @expires_at, @sender_public_key, @sender_signature)
   `),
   getInvitationByToken: registryDb.prepare(`SELECT * FROM invitations WHERE token = ?`),
   getInvitationById: registryDb.prepare(`SELECT * FROM invitations WHERE id = ?`),
