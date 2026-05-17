@@ -351,4 +351,99 @@ describe('auth router', () => {
     });
     expect(loginRes.status).toBe(401);
   });
+
+  // ── ZK #5: expires_at enforcement & sender info in registration response ──
+
+  it('rejects registration when invitation expires_at is in the past', async () => {
+    const { registryStmts, closeRegistryDb: _ } = await import('../db/registry');
+    registryStmts.insertInvitation.run({
+      id: randomUUID(),
+      token: 'expired-invite-token',
+      email: 'expiredtest@example.com',
+      created_at: Date.now() - 8 * 24 * 60 * 60 * 1000,
+      expires_at: Date.now() - 1, // already expired
+      sender_public_key: null,
+      sender_signature: null,
+    });
+
+    const res = await fetch(`${baseUrl}/api/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: 'expiredtest@example.com',
+        password: hashPassword('passphrase'),
+        name: 'Expired User',
+        invitationToken: 'expired-invite-token',
+      }),
+    });
+
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: string };
+    expect(body.error).toMatch(/elapsed/i);
+  });
+
+  it('includes sender_public_key and sender_signature in 201 response when invitation was signed', async () => {
+    const privKey = randomBytes(32);
+    const pubKey = ed25519.getPublicKey(privKey);
+    const token = 'signed-invite-token-00' + '0'.repeat(43); // 64 hex chars
+    const expiresAt = Date.now() + 7 * 24 * 60 * 60 * 1000;
+    const email = 'signedregtest@example.com';
+
+    // Build canonical payload bytes (must match server logic)
+    const payload = new TextEncoder().encode(
+      `sovernote_invite:${token}:${email.toLowerCase().trim()}:${expiresAt}`,
+    );
+    const sig = ed25519.sign(payload, privKey);
+    const sigBase64 = Buffer.from(sig).toString('base64');
+    const pubKeyBase64 = Buffer.from(pubKey).toString('base64');
+
+    const { registryStmts } = await import('../db/registry');
+    registryStmts.insertInvitation.run({
+      id: randomUUID(),
+      token,
+      email,
+      created_at: Date.now(),
+      expires_at: expiresAt,
+      sender_public_key: pubKeyBase64,
+      sender_signature: sigBase64,
+    });
+
+    const res = await fetch(`${baseUrl}/api/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email,
+        password: hashPassword('passphrase'),
+        name: 'Signed User',
+        invitationToken: token,
+      }),
+    });
+
+    expect(res.status).toBe(201);
+    const body = await res.json() as {
+      user: { email: string };
+      invitation?: { sender_public_key: string; sender_signature: string; expires_at: number };
+    };
+    expect(body.invitation).toBeDefined();
+    expect(body.invitation?.sender_public_key).toBe(pubKeyBase64);
+    expect(body.invitation?.sender_signature).toBe(sigBase64);
+    expect(body.invitation?.expires_at).toBe(expiresAt);
+  });
+
+  it('omits invitation field in 201 response when invitation was unsigned', async () => {
+    const res = await fetch(`${baseUrl}/api/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: 'alice@example.com',
+        password: hashPassword('passphrase'),
+        name: 'Alice',
+        invitationToken: 'invite-token-123',
+      }),
+    });
+
+    expect(res.status).toBe(201);
+    const body = await res.json() as { invitation?: unknown };
+    expect(body.invitation).toBeUndefined();
+  });
 });
