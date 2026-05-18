@@ -50,7 +50,7 @@ describe('admin router — POST /api/admin/invitations (ZK #5)', () => {
   let tmpDir: string;
   let server: ReturnType<typeof express['application']['listen']> | null = null;
   let baseUrl = '';
-  let adminHeaders: HeadersInit;
+  let adminHeaders: Record<string, string>;
 
   beforeEach(async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sovernote-admin-test-'));
