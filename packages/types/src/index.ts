@@ -234,6 +234,8 @@ export interface TagDefinition {
 export interface AuthPayload {
   email: string;
   password: string;
+  /** When true the server issues a persistent 30-day cookie. Defaults to false (session-scoped cookie). */
+  remember_me?: boolean;
 }
 
 /** Response of POST /api/auth/register and POST /api/auth/login */

@@ -85,11 +85,18 @@ const COOKIE_BASE = {
   path: '/',
 };
 
-/** 7 days in seconds (for maxAge). */
-const SEVEN_DAYS_S = 7 * 24 * 60 * 60;
+/** 30 days in milliseconds (for maxAge when remember_me = true). */
+const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
-function setSessionCookie(res: Response, token: string): void {
-  res.cookie(SESSION_COOKIE, token, { ...COOKIE_BASE, maxAge: SEVEN_DAYS_S * 1000 });
+/**
+ * Set the session cookie.
+ * @param remember - when true (default) the cookie persists for 30 days;
+ *                   when false a session-scoped cookie is issued (no maxAge)
+ *                   so it expires when the browser closes.
+ */
+function setSessionCookie(res: Response, token: string, remember = true): void {
+  const opts = remember ? { ...COOKIE_BASE, maxAge: THIRTY_DAYS_MS } : COOKIE_BASE;
+  res.cookie(SESSION_COOKIE, token, opts);
 }
 
 // ---------------------------------------------------------------------------
@@ -238,12 +245,14 @@ authRouter.post('/register', authLimiter, async (req: Request, res: Response) =>
 //              { email, password }          — password is a lowercase SHA-256 hex digest
 // ---------------------------------------------------------------------------
 authRouter.post('/login', authLimiter, async (req: Request, res: Response) => {
-  const { email, signature, nonce: clientNonce, password } = req.body as {
+  const { email, signature, nonce: clientNonce, password, remember_me } = req.body as {
     email?: string;
     signature?: string;
     nonce?: string;
     password?: string;
+    remember_me?: boolean;
   };
+  const remember = remember_me === true;
 
   if (!email || typeof email !== 'string') {
     res.status(400).json({ error: 'email is required' });
@@ -302,7 +311,7 @@ authRouter.post('/login', authLimiter, async (req: Request, res: Response) => {
     const token = jwt.sign({ sub: user.id, email: user.email }, JWT_SECRET, {
       expiresIn: JWT_EXPIRES_IN,
     });
-    setSessionCookie(res, token);
+    setSessionCookie(res, token, remember);
     res.json({
       user: { id: user.id, email: user.email, properties: parseUserProperties(user), created_at: user.created_at, public_key: user.public_key },
       wrapped_content_key: user.wrapped_content_key ?? null,
@@ -340,7 +349,7 @@ authRouter.post('/login', authLimiter, async (req: Request, res: Response) => {
     expiresIn: JWT_EXPIRES_IN,
   });
 
-  setSessionCookie(res, token);
+  setSessionCookie(res, token, remember);
   res.json({
     user: { id: user.id, email: user.email, properties: parseUserProperties(user), created_at: user.created_at, public_key: user.public_key ?? null },
     wrapped_content_key: user.wrapped_content_key ?? null,
