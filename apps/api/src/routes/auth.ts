@@ -7,7 +7,7 @@ import { ed25519 } from '@noble/curves/ed25519.js';
 import { registryStmts, parseUserProperties } from '../db/registry';
 import type { UserRow, InvitationRow } from '../db/registry';
 import { JWT_SECRET, JWT_EXPIRES_IN, requireAuth } from '../middleware/auth';
-import type { AuthPayload } from '@sovernote/types';
+import type { AuthPayload } from '@ubimate/types';
 
 export const authRouter = Router();
 

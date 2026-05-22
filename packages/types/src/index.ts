@@ -1,6 +1,6 @@
 // ---------------------------------------------------------------------------
 // Shared domain types — used by both apps/api and apps/web.
-// This is the single source of truth for the Sovernote data model.
+// This is the single source of truth for the Ubimate data model.
 // ---------------------------------------------------------------------------
 
 export type DocumentType = 'page' | 'db-page' | 'folder' | 'db-folder' | 'workspace' | 'image' | 'file' | 'block-registry';

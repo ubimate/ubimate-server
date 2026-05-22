@@ -12,8 +12,8 @@
   "dependencies": {
     "@hocuspocus/server": "2.15.3",
     "@noble/curves": "2.2.0",
-    "@sovernote/types": "workspace:*",
-    "@sovernote/utils": "workspace:*",
+    "@ubimate/types": "workspace:*",
+    "@ubimate/utils": "workspace:*",
     "bcryptjs": "3.0.3",
     "better-sqlite3": "11.10.0",
     "cookie-parser": "1.4.7",

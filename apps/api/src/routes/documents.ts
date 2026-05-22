@@ -12,8 +12,8 @@ import type {
   StructOp,
   SyncStructuralPayload,
   SyncStructuralResult,
-} from '@sovernote/types';
-import { generateKeyBetween } from '@sovernote/utils';
+} from '@ubimate/types';
+import { generateKeyBetween } from '@ubimate/utils';
 import { requireAuth } from '../middleware/auth';
 
 const DATA_DIR = process.env.DATA_DIR ?? path.join(__dirname, '../../data');

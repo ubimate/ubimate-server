@@ -239,7 +239,7 @@ adminRouter.post('/invitations', async (req: Request, res: Response) => {
       const pubKeyBytes = Uint8Array.from(atob(sender_public_key), (c) => c.charCodeAt(0));
       const sigBytes = Uint8Array.from(atob(sender_signature), (c) => c.charCodeAt(0));
       const msgBytes = new TextEncoder().encode(
-        `sovernote_invite:${token}:${normalizedEmail}:${expiresAt}`,
+        `ubimate_invite:${token}:${normalizedEmail}:${expiresAt}`,
       );
       const valid = ed25519.verify(sigBytes, msgBytes, pubKeyBytes);
       if (!valid) {

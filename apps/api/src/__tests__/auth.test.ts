@@ -37,7 +37,7 @@ describe('auth router', () => {
   let baseUrl = '';
 
   beforeEach(async () => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sovernote-auth-test-'));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ubimate-auth-test-'));
     process.env.DATA_DIR = tmpDir;
     process.env.JWT_SECRET = 'test-jwt-secret';
     process.env.REQUIRE_INVITATION = 'true';
@@ -391,7 +391,7 @@ describe('auth router', () => {
 
     // Build canonical payload bytes (must match server logic)
     const payload = new TextEncoder().encode(
-      `sovernote_invite:${token}:${email.toLowerCase().trim()}:${expiresAt}`,
+      `ubimate_invite:${token}:${email.toLowerCase().trim()}:${expiresAt}`,
     );
     const sig = ed25519.sign(payload, privKey);
     const sigBase64 = Buffer.from(sig).toString('base64');

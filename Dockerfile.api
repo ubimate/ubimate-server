@@ -16,7 +16,7 @@ RUN pnpm install --frozen-lockfile
 # Copy source and build
 COPY packages/ packages/
 COPY apps/api/ apps/api/
-RUN pnpm --filter @sovernote/utils build
+RUN pnpm --filter @ubimate/utils build
 RUN pnpm --filter api build
 
 ENV NODE_ENV=production

@@ -39,11 +39,11 @@ export const hocuspocus = Server.configure({
   /**
    * No standalone port — Hocuspocus is mounted on the Express HTTP server
    * via handleUpgrade in index.ts.  In development the client connects to
-   * ws://localhost:3001/yjs; in production to wss://sovernote.app/yjs.
+   * ws://localhost:3001/yjs; in production to wss://app.ubimate.com/yjs.
    */
 
   /**
-   * Debounce onChange calls by 1 s (matching sovernote17's behaviour).
+   * Debounce onChange calls by 1 s (matching ubimate17's behaviour).
    */
   debounce: 1000,
 

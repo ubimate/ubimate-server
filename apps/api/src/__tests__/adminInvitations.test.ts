@@ -32,7 +32,7 @@ function generateKeypair() {
 
 function signPayload(token: string, email: string, expiresAt: number, privateKey: Uint8Array): string {
   const payload = new TextEncoder().encode(
-    `sovernote_invite:${token}:${email.toLowerCase().trim()}:${expiresAt}`,
+    `ubimate_invite:${token}:${email.toLowerCase().trim()}:${expiresAt}`,
   );
   const sig = ed25519.sign(payload, privateKey);
   return Buffer.from(sig).toString('base64');
@@ -53,12 +53,12 @@ describe('admin router — POST /api/admin/invitations (ZK #5)', () => {
   let adminHeaders: Record<string, string>;
 
   beforeEach(async () => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sovernote-admin-test-'));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ubimate-admin-test-'));
     process.env.DATA_DIR = tmpDir;
     process.env.JWT_SECRET = 'test-jwt-secret';
     process.env.ADMIN_USERNAME = 'testadmin';
     process.env.ADMIN_PASSWORD = 'AdminPass123!';
-    process.env.ADMIN_EMAIL = 'admin@sovernote.test';
+    process.env.ADMIN_EMAIL = 'admin@ubimate.test';
     process.env.NODE_ENV = 'test';
     // Disable email sending to avoid SMTP errors in tests
     delete process.env.SMTP_HOST;

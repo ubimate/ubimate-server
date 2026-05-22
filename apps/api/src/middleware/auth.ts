@@ -8,7 +8,7 @@ export const JWT_SECRET = process.env.JWT_SECRET ?? (() => {
     throw new Error('JWT_SECRET environment variable must be set in production');
   }
   console.warn('[auth] JWT_SECRET not set — using insecure default (dev only)');
-  return 'sovernote-dev-secret-change-in-production';
+  return 'ubimate-dev-secret-change-in-production';
 })();
 
 export const JWT_EXPIRES_IN = '7d';

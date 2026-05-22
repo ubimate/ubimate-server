@@ -1,5 +1,5 @@
 {
-  "name": "@sovernote/types",
+  "name": "@ubimate/types",
   "version": "0.1.0",
   "private": true,
   "main": "./src/index.ts",

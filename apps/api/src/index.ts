@@ -33,8 +33,8 @@ const DATA_DIR = process.env.DATA_DIR ?? path.join(__dirname, '../data');
 
 const app = express();
 
-// In production set CORS_ORIGIN to the exact origin (e.g. https://sovernote.app)
-// or a comma-separated list (e.g. https://sovernote.app,http://localhost:5173).
+// In production set CORS_ORIGIN to the exact origin (e.g. https://app.ubimate.com)
+// or a comma-separated list (e.g. https://app.ubimate.com,http://localhost:5173).
 // Tauri desktop origins (https://tauri.localhost, tauri://localhost) are always allowed.
 // In development we allow any localhost / 127.0.0.1 / ::1 origin on any port
 // so Safari, Chrome, and Tauri webviews all work without extra config.
