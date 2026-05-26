@@ -446,4 +446,99 @@ describe('auth router', () => {
     const body = await res.json() as { invitation?: unknown };
     expect(body.invitation).toBeUndefined();
   });
+
+  it('reset-request is enumeration-safe', async () => {
+    const existingRes = await fetch(`${baseUrl}/api/auth/reset-request`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'alice@example.com' }),
+    });
+    expect(existingRes.status).toBe(202);
+
+    const unknownRes = await fetch(`${baseUrl}/api/auth/reset-request`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'nobody@example.com' }),
+    });
+    expect(unknownRes.status).toBe(202);
+
+    const existingBody = await existingRes.json() as { ok: boolean; message: string };
+    const unknownBody = await unknownRes.json() as { ok: boolean; message: string };
+    expect(existingBody).toEqual(unknownBody);
+  });
+
+  it('reset-confirm updates auth secret and clears account crypto keys', async () => {
+    const email = 'alice@example.com';
+    const oldPasswordHash = hashPassword('old-passphrase');
+    const newPasswordHash = hashPassword('new-passphrase');
+    const keypair = generateTestKeypair();
+
+    const registerRes = await fetch(`${baseUrl}/api/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email,
+        password: oldPasswordHash,
+        invitationToken: 'invite-token-123',
+        publicKey: keypair.publicKeyBase64,
+        wrappedContentKey: 'wrapped-key-base64',
+      }),
+    });
+    expect(registerRes.status).toBe(201);
+
+    const { registryStmts } = await import('../db/registry');
+    const userRow = registryStmts.getUserByEmail.get(email) as { id: string };
+
+    const resetToken = 'f'.repeat(64);
+    registryStmts.insertCredentialResetToken.run({
+      id: randomUUID(),
+      user_id: userRow.id,
+      token_hash: createHash('sha256').update(resetToken, 'utf8').digest('hex'),
+      created_at: Date.now(),
+      expires_at: Date.now() + 60_000,
+    });
+
+    const confirmRes = await fetch(`${baseUrl}/api/auth/reset-confirm`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: resetToken, new_password: newPasswordHash, confirm_wipe: true }),
+    });
+    expect(confirmRes.status).toBe(204);
+
+    // Token must be one-time use.
+    const confirmAgainRes = await fetch(`${baseUrl}/api/auth/reset-confirm`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: resetToken, new_password: newPasswordHash, confirm_wipe: true }),
+    });
+    expect(confirmAgainRes.status).toBe(410);
+
+    const refreshedUser = registryStmts.getUserByEmail.get(email) as {
+      public_key: string | null;
+      wrapped_content_key: string | null;
+    };
+    expect(refreshedUser.public_key).toBeNull();
+    expect(refreshedUser.wrapped_content_key).toBeNull();
+
+    // Old auth hash no longer works.
+    const oldLoginRes = await fetch(`${baseUrl}/api/auth/login/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password: oldPasswordHash }),
+    });
+    expect(oldLoginRes.status).toBe(401);
+
+    // New auth hash works via legacy path after reset.
+    const newLoginRes = await fetch(`${baseUrl}/api/auth/login/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password: newPasswordHash }),
+    });
+    expect(newLoginRes.status).toBe(200);
+
+    // ZK key presence should now be false.
+    const challengeRes = await fetch(`${baseUrl}/api/auth/challenge?email=${encodeURIComponent(email)}`);
+    const challengeBody = await challengeRes.json() as { has_zk_keys: boolean };
+    expect(challengeBody.has_zk_keys).toBe(false);
+  });
 });

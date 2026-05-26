@@ -52,3 +52,33 @@ export async function sendInvitationEmail(to: string, token: string): Promise<vo
     ].join('\n'),
   });
 }
+
+export async function sendCredentialResetEmail(to: string, token: string): Promise<void> {
+  if (!transporter) {
+    throw new Error('SMTP not configured');
+  }
+
+  const resetUrl = `${APP_URL}/reset-credentials?token=${encodeURIComponent(token)}`;
+
+  await transporter.sendMail({
+    from: SMTP_FROM,
+    to,
+    subject: 'Reset your Ubimate sync credentials',
+    text: [
+      'You requested a Ubimate credential reset.',
+      '',
+      'This action is destructive for cloud sync state and should be used only when needed.',
+      '',
+      `Confirm reset: ${resetUrl}`,
+      '',
+      'If you did not request this, you can ignore this email.',
+    ].join('\n'),
+    html: [
+      '<h2>Reset your Ubimate sync credentials</h2>',
+      '<p>You requested a credential reset.</p>',
+      '<p>This action is destructive for cloud sync state and should be used only when needed.</p>',
+      `<p><a href="${resetUrl}" style="display:inline-block;padding:12px 24px;background:#1677ff;color:#fff;text-decoration:none;border-radius:6px;">Confirm reset</a></p>`,
+      '<p><small>If you did not request this, you can ignore this email.</small></p>',
+    ].join('\n'),
+  });
+}

@@ -1,13 +1,14 @@
 import { Router, Request, Response } from 'express';
-import { randomUUID, randomBytes } from 'crypto';
+import { randomUUID, randomBytes, createHash } from 'crypto';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import rateLimit from 'express-rate-limit';
 import { ed25519 } from '@noble/curves/ed25519.js';
-import { registryStmts, parseUserProperties } from '../db/registry';
-import type { UserRow, InvitationRow } from '../db/registry';
+import { registryStmts, parseUserProperties, withRegistryTransaction } from '../db/registry';
+import type { UserRow, InvitationRow, CredentialResetTokenRow } from '../db/registry';
 import { JWT_SECRET, JWT_EXPIRES_IN, requireAuth } from '../middleware/auth';
 import type { AuthPayload } from '@ubimate/types';
+import { sendCredentialResetEmail } from '../email';
 
 export const authRouter = Router();
 
@@ -37,6 +38,7 @@ const authLimiter = rateLimit({
 
 /** TTL for a one-time nonce: 30 seconds. */
 const NONCE_TTL_MS = 30_000;
+const RESET_TOKEN_TTL_MS = 30 * 60 * 1000;
 
 interface NonceEntry {
   /** 64-char lowercase hex (32 random bytes). */
@@ -71,6 +73,10 @@ const SHA256_HEX_LEN = 64;
 
 function isSha256Hex(value: string): boolean {
   return value.length === SHA256_HEX_LEN && /^[a-f0-9]+$/.test(value);
+}
+
+function sha256Hex(value: string): string {
+  return createHash('sha256').update(value, 'utf8').digest('hex');
 }
 
 // Cookie name used for the session token.
@@ -463,6 +469,102 @@ authRouter.post('/login/token', authLimiter, async (req: Request, res: Response)
     wrapped_content_key: user.wrapped_content_key ?? null,
     token,
   });
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/auth/reset-request
+//
+// Enumeration-safe endpoint: always returns 202. If the account exists, creates
+// a one-time token and attempts to email a reset link.
+// ---------------------------------------------------------------------------
+authRouter.post('/reset-request', authLimiter, async (req: Request, res: Response) => {
+  const { email } = req.body as { email?: string };
+
+  if (!email || typeof email !== 'string' || !email.includes('@')) {
+    res.status(400).json({ error: 'Valid email is required' });
+    return;
+  }
+
+  const normalizedEmail = email.trim().toLowerCase();
+  const user = registryStmts.getUserByEmail.get(normalizedEmail) as UserRow | undefined;
+
+  if (user) {
+    const rawToken = randomBytes(32).toString('hex');
+    const now = Date.now();
+    registryStmts.insertCredentialResetToken.run({
+      id: randomUUID(),
+      user_id: user.id,
+      token_hash: sha256Hex(rawToken),
+      created_at: now,
+      expires_at: now + RESET_TOKEN_TTL_MS,
+    });
+
+    try {
+      await sendCredentialResetEmail(user.email, rawToken);
+    } catch (err) {
+      console.warn('[auth] reset-request email failed:', err);
+    }
+  }
+
+  res.status(202).json({ ok: true, message: 'If that account exists, a reset email has been sent.' });
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/auth/reset-confirm
+//
+// Scaffold implementation for SN209. Confirms a one-time reset token,
+// re-seeds account auth with a new password hash, and clears account crypto
+// key wrappers so the account must be re-bootstrapped from a trusted device.
+// ---------------------------------------------------------------------------
+authRouter.post('/reset-confirm', authLimiter, async (req: Request, res: Response) => {
+  const { token, new_password, confirm_wipe } = req.body as {
+    token?: string;
+    new_password?: string;
+    confirm_wipe?: boolean;
+  };
+
+  if (!token || typeof token !== 'string') {
+    res.status(400).json({ error: 'token is required' });
+    return;
+  }
+  if (!new_password || typeof new_password !== 'string' || !isSha256Hex(new_password)) {
+    res.status(400).json({ error: 'new_password must be a lowercase SHA-256 hex digest' });
+    return;
+  }
+  if (confirm_wipe !== true) {
+    res.status(400).json({ error: 'confirm_wipe must be true' });
+    return;
+  }
+
+  const tokenRow = registryStmts.getCredentialResetTokenByHash.get(sha256Hex(token)) as CredentialResetTokenRow | undefined;
+
+  if (!tokenRow || tokenRow.consumed_at != null || tokenRow.expires_at < Date.now()) {
+    res.status(410).json({ error: 'Reset token is invalid, expired, or already used' });
+    return;
+  }
+
+  const user = registryStmts.getUserById.get(tokenRow.user_id) as UserRow | undefined;
+  if (!user) {
+    res.status(410).json({ error: 'Reset token is invalid, expired, or already used' });
+    return;
+  }
+
+  const newPasswordHash = await bcrypt.hash(new_password, 12);
+  const now = Date.now();
+
+  withRegistryTransaction(() => {
+    registryStmts.updateUserForCredentialReset.run({
+      id: user.id,
+      password_hash: newPasswordHash,
+    });
+    registryStmts.consumeCredentialResetToken.run(now, tokenRow.id);
+    registryStmts.deleteCredentialResetTokensForUser.run(user.id);
+  });
+
+  // Best-effort: clear current browser cookie. Full global session invalidation
+  // requires stateful session versioning and is tracked separately.
+  res.clearCookie(SESSION_COOKIE, COOKIE_BASE);
+  res.status(204).send();
 });
 
 // ---------------------------------------------------------------------------

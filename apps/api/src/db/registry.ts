@@ -88,6 +88,24 @@ registryDb.exec(`
   CREATE UNIQUE INDEX IF NOT EXISTS idx_invitations_token ON invitations(token);
 `);
 
+// ---------------------------------------------------------------------------
+// Credential reset tokens
+// ---------------------------------------------------------------------------
+
+registryDb.exec(`
+  CREATE TABLE IF NOT EXISTS credential_reset_tokens (
+    id          TEXT    PRIMARY KEY,
+    user_id     TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token_hash  TEXT    NOT NULL UNIQUE,
+    created_at  INTEGER NOT NULL,
+    expires_at  INTEGER NOT NULL,
+    consumed_at INTEGER
+  );
+`);
+registryDb.exec(`
+  CREATE INDEX IF NOT EXISTS idx_reset_tokens_user_id ON credential_reset_tokens(user_id);
+`);
+
 // Migrations — add ZK #5 columns if they do not already exist.
 {
   const cols = (registryDb.pragma('table_info(invitations)') as { name: string }[]).map((c) => c.name);
@@ -123,6 +141,13 @@ export const registryStmts = {
   updateUserCryptoKeys: registryDb.prepare(`
     UPDATE users SET public_key = @public_key, wrapped_content_key = @wrapped_content_key WHERE id = @id
   `),
+  updateUserForCredentialReset: registryDb.prepare(`
+    UPDATE users
+    SET password_hash = @password_hash,
+        public_key = NULL,
+        wrapped_content_key = NULL
+    WHERE id = @id
+  `),
   deleteUser: registryDb.prepare(`DELETE FROM users WHERE id = ?`),
   listUsers: registryDb.prepare(`SELECT id, email, properties, status, created_at FROM users`),
 
@@ -137,7 +162,38 @@ export const registryStmts = {
   markInvitationAccepted: registryDb.prepare(`UPDATE invitations SET accepted_at = ? WHERE id = ?`),
   deleteInvitation: registryDb.prepare(`DELETE FROM invitations WHERE id = ?`),
   getPendingInvitationByEmail: registryDb.prepare(`SELECT * FROM invitations WHERE email = ? AND accepted_at IS NULL`),
+
+  // Credential reset tokens
+  insertCredentialResetToken: registryDb.prepare(`
+    INSERT INTO credential_reset_tokens (id, user_id, token_hash, created_at, expires_at, consumed_at)
+    VALUES (@id, @user_id, @token_hash, @created_at, @expires_at, NULL)
+  `),
+  getCredentialResetTokenByHash: registryDb.prepare(`
+    SELECT * FROM credential_reset_tokens WHERE token_hash = ?
+  `),
+  getLatestCredentialResetTokenForUser: registryDb.prepare(`
+    SELECT * FROM credential_reset_tokens WHERE user_id = ? ORDER BY created_at DESC LIMIT 1
+  `),
+  consumeCredentialResetToken: registryDb.prepare(`
+    UPDATE credential_reset_tokens SET consumed_at = ? WHERE id = ?
+  `),
+  deleteCredentialResetTokensForUser: registryDb.prepare(`
+    DELETE FROM credential_reset_tokens WHERE user_id = ?
+  `),
 } as const;
+
+export interface CredentialResetTokenRow {
+  id: string;
+  user_id: string;
+  token_hash: string;
+  created_at: number;
+  expires_at: number;
+  consumed_at: number | null;
+}
+
+export function withRegistryTransaction<T>(fn: () => T): T {
+  return registryDb.transaction(fn)();
+}
 
 /** Close the shared registry DB. Intended for tests that load the module in isolation. */
 export function closeRegistryDb(): void {
