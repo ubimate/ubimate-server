@@ -19,7 +19,7 @@ registryDb.exec(`
     id            TEXT    PRIMARY KEY,
     email         TEXT    NOT NULL UNIQUE,
     properties    TEXT    NOT NULL DEFAULT '{}',
-    password_hash TEXT    NOT NULL,
+    password_hash TEXT,
     created_at    INTEGER NOT NULL,
     status        TEXT    NOT NULL DEFAULT 'active'
   );
@@ -48,12 +48,41 @@ if (!cols.includes('wrapped_content_key')) {
   registryDb.exec(`ALTER TABLE users ADD COLUMN wrapped_content_key TEXT`);
 }
 
+// Migrate historical schemas where password_hash was required (NOT NULL).
+// Legacy password auth has been removed; keep the column for compatibility,
+// but make it optional so new ZK-only accounts can persist NULL.
+{
+  const tableInfo = registryDb.pragma('table_info(users)') as { name: string; notnull: number }[];
+  const passwordHashCol = tableInfo.find(c => c.name === 'password_hash');
+  if (passwordHashCol && passwordHashCol.notnull === 1) {
+    registryDb.exec(`
+      BEGIN TRANSACTION;
+      CREATE TABLE users_new (
+        id                 TEXT    PRIMARY KEY,
+        email              TEXT    NOT NULL UNIQUE,
+        properties         TEXT    NOT NULL DEFAULT '{}',
+        password_hash      TEXT,
+        created_at         INTEGER NOT NULL,
+        status             TEXT    NOT NULL DEFAULT 'active',
+        public_key         TEXT,
+        wrapped_content_key TEXT
+      );
+      INSERT INTO users_new (id, email, properties, password_hash, created_at, status, public_key, wrapped_content_key)
+      SELECT id, email, properties, password_hash, created_at, status, public_key, wrapped_content_key
+      FROM users;
+      DROP TABLE users;
+      ALTER TABLE users_new RENAME TO users;
+      COMMIT;
+    `);
+  }
+}
+
 export interface UserRow {
   id: string;
   email: string;
   /** Raw JSON string — use parseUserProperties() to deserialise. */
   properties: string;
-  password_hash: string;
+  password_hash: string | null;
   created_at: number;
   status: string;
   /** Base64-encoded Ed25519 public key — null for pre-ZK accounts. */
@@ -133,8 +162,8 @@ export interface InvitationRow {
 
 export const registryStmts = {
   createUser: registryDb.prepare(`
-    INSERT INTO users (id, email, properties, password_hash, created_at, status, public_key, wrapped_content_key)
-    VALUES (@id, @email, @properties, @password_hash, @created_at, @status, @public_key, @wrapped_content_key)
+    INSERT INTO users (id, email, properties, created_at, status, public_key, wrapped_content_key)
+    VALUES (@id, @email, @properties, @created_at, @status, @public_key, @wrapped_content_key)
   `),
   getUserByEmail: registryDb.prepare(`SELECT * FROM users WHERE email = ?`),
   getUserById: registryDb.prepare(`SELECT * FROM users WHERE id = ?`),

@@ -1,14 +1,12 @@
 import { Router, Request, Response } from 'express';
-import { randomUUID, randomBytes, createHash } from 'crypto';
-import bcrypt from 'bcryptjs';
+import { randomUUID, randomBytes } from 'crypto';
 import jwt from 'jsonwebtoken';
 import rateLimit from 'express-rate-limit';
 import { ed25519 } from '@noble/curves/ed25519.js';
-import { registryStmts, parseUserProperties, withRegistryTransaction } from '../db/registry';
-import type { UserRow, InvitationRow, CredentialResetTokenRow } from '../db/registry';
+import { registryStmts, parseUserProperties } from '../db/registry';
+import type { UserRow, InvitationRow } from '../db/registry';
 import { JWT_SECRET, JWT_EXPIRES_IN, requireAuth } from '../middleware/auth';
 import type { AuthPayload } from '@ubimate/types';
-import { sendCredentialResetEmail } from '../email';
 
 export const authRouter = Router();
 
@@ -38,7 +36,6 @@ const authLimiter = rateLimit({
 
 /** TTL for a one-time nonce: 30 seconds. */
 const NONCE_TTL_MS = 30_000;
-const RESET_TOKEN_TTL_MS = 30 * 60 * 1000;
 
 interface NonceEntry {
   /** 64-char lowercase hex (32 random bytes). */
@@ -63,21 +60,6 @@ function cleanupNonces(): void {
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
-
-/** bcrypt silently truncates inputs at 72 bytes. Cap passwords to prevent two
- * different passwords from being accepted as equal. */
-const MAX_PASSWORD_BYTES = 72;
-
-/** Lowercase SHA-256 hex digest length. */
-const SHA256_HEX_LEN = 64;
-
-function isSha256Hex(value: string): boolean {
-  return value.length === SHA256_HEX_LEN && /^[a-f0-9]+$/.test(value);
-}
-
-function sha256Hex(value: string): string {
-  return createHash('sha256').update(value, 'utf8').digest('hex');
-}
 
 // Cookie name used for the session token.
 const SESSION_COOKIE = 'nf_session';
@@ -122,9 +104,7 @@ authRouter.get('/challenge', authLimiter, (req: Request, res: Response) => {
   const expiresAt = Date.now() + NONCE_TTL_MS;
   nonceStore.set(normalizedEmail, { nonce, expiresAt, consumed: false });
 
-  // Indicate whether the account has ZK keys registered. Returns false for
-  // both non-existent users and legacy (pre-ZK) users so the client can fall
-  // back to the password-hash path without leaking account existence.
+  // has_zk_keys is retained for backward-compatible clients.
   const user = registryStmts.getUserByEmail.get(normalizedEmail) as UserRow | undefined;
   const hasZkKeys = !!(user?.public_key);
 
@@ -135,7 +115,7 @@ authRouter.get('/challenge', authLimiter, (req: Request, res: Response) => {
 // POST /api/auth/register
 // ---------------------------------------------------------------------------
 authRouter.post('/register', authLimiter, async (req: Request, res: Response) => {
-  const { email, password, name, invitationToken, publicKey, wrappedContentKey } = req.body as AuthPayload & {
+  const { email, name, invitationToken, publicKey, wrappedContentKey } = req.body as AuthPayload & {
     name?: string;
     invitationToken?: string;
     publicKey?: string;
@@ -150,21 +130,12 @@ authRouter.post('/register', authLimiter, async (req: Request, res: Response) =>
     res.status(400).json({ error: 'Valid email is required' });
     return;
   }
-  if (!password || typeof password !== 'string' || !isSha256Hex(password)) {
-    res.status(400).json({ error: 'Password hash is required' });
+  if (!publicKey || typeof publicKey !== 'string') {
+    res.status(400).json({ error: 'publicKey is required' });
     return;
   }
-  if (Buffer.byteLength(password, 'utf8') > MAX_PASSWORD_BYTES) {
-    res.status(400).json({ error: 'Invalid password hash size' });
-    return;
-  }
-
-  if (publicKey !== undefined && (typeof publicKey !== 'string' || publicKey.length === 0)) {
-    res.status(400).json({ error: 'publicKey must be a non-empty base64 string' });
-    return;
-  }
-  if (wrappedContentKey !== undefined && (typeof wrappedContentKey !== 'string' || wrappedContentKey.length === 0)) {
-    res.status(400).json({ error: 'wrappedContentKey must be a non-empty base64 string' });
+  if (!wrappedContentKey || typeof wrappedContentKey !== 'string') {
+    res.status(400).json({ error: 'wrappedContentKey is required' });
     return;
   }
 
@@ -200,7 +171,6 @@ authRouter.post('/register', authLimiter, async (req: Request, res: Response) =>
     return;
   }
 
-  const passwordHash = await bcrypt.hash(password, 12);
   const userId = randomUUID();
   const now = Date.now();
 
@@ -209,11 +179,10 @@ authRouter.post('/register', authLimiter, async (req: Request, res: Response) =>
     id: userId,
     email: normalizedEmail,
     properties: JSON.stringify(properties),
-    password_hash: passwordHash,
     created_at: now,
     status: 'active',
-    public_key: publicKey ?? null,
-    wrapped_content_key: wrappedContentKey ?? null,
+    public_key: publicKey,
+    wrapped_content_key: wrappedContentKey,
   });
 
   // Mark invitation as accepted
@@ -227,8 +196,8 @@ authRouter.post('/register', authLimiter, async (req: Request, res: Response) =>
 
   setSessionCookie(res, token);
   res.status(201).json({
-    user: { id: userId, email: normalizedEmail, properties, created_at: now, public_key: publicKey ?? null },
-    wrapped_content_key: wrappedContentKey ?? null,
+    user: { id: userId, email: normalizedEmail, properties, created_at: now, public_key: publicKey },
+    wrapped_content_key: wrappedContentKey,
     ...(matchedInvitation?.sender_public_key && matchedInvitation?.sender_signature
       ? {
           invitation: {
@@ -244,18 +213,14 @@ authRouter.post('/register', authLimiter, async (req: Request, res: Response) =>
 // ---------------------------------------------------------------------------
 // POST /api/auth/login
 //
-// Supports two authentication paths:
-//   ZK path    (for accounts with a registered Ed25519 public key):
-//              { email, nonce, signature }  — signature is base64(Ed25519.sign(nonce_utf8, sk))
-//   Legacy path (for pre-ZK accounts where public_key IS NULL):
-//              { email, password }          — password is a lowercase SHA-256 hex digest
+// Strict ZK authentication path only:
+//   { email, nonce, signature } where signature = base64(Ed25519.sign(nonce_utf8, sk))
 // ---------------------------------------------------------------------------
 authRouter.post('/login', authLimiter, async (req: Request, res: Response) => {
-  const { email, signature, nonce: clientNonce, password, remember_me } = req.body as {
+  const { email, signature, nonce: clientNonce, remember_me } = req.body as {
     email?: string;
     signature?: string;
     nonce?: string;
-    password?: string;
     remember_me?: boolean;
   };
   const remember = remember_me === true;
@@ -266,83 +231,37 @@ authRouter.post('/login', authLimiter, async (req: Request, res: Response) => {
   }
   const normalizedEmail = email.trim().toLowerCase();
 
-  // ── ZK path ──────────────────────────────────────────────────────────────
-  if (signature !== undefined) {
-    if (!clientNonce || typeof clientNonce !== 'string' || typeof signature !== 'string') {
-      res.status(400).json({ error: 'nonce and signature are required for ZK login' });
-      return;
-    }
-
-    const user = registryStmts.getUserByEmail.get(normalizedEmail) as UserRow | undefined;
-
-    // Respond with the same error regardless of whether the user exists or has
-    // no public key, to avoid leaking account state.
-    if (!user || !user.public_key) {
-      res.status(401).json({ error: 'Invalid credentials' });
-      return;
-    }
-
-    // Consume nonce (single-use; consumed even on signature failure to prevent
-    // an attacker from iterating signatures within the TTL window — rate
-    // limiting provides the remaining brute-force protection).
-    const stored = nonceStore.get(normalizedEmail);
-    if (!stored || stored.consumed || stored.expiresAt < Date.now() || stored.nonce !== clientNonce) {
-      res.status(401).json({ error: 'Invalid or expired nonce' });
-      return;
-    }
-    stored.consumed = true;
-
-    // Verify Ed25519 signature.  The client signs the UTF-8 bytes of the nonce
-    // hex string using libsodium crypto_sign_detached (standard RFC 8032 Ed25519).
-    let valid = false;
-    try {
-      const sigBytes = Buffer.from(signature, 'base64');
-      const pubKeyBytes = Buffer.from(user.public_key, 'base64');
-      const msgBytes = Buffer.from(clientNonce, 'utf8');
-      valid = ed25519.verify(sigBytes, msgBytes, pubKeyBytes);
-    } catch {
-      valid = false;
-    }
-
-    if (!valid) {
-      res.status(401).json({ error: 'Invalid credentials' });
-      return;
-    }
-
-    if (user.status !== 'active') {
-      res.status(403).json({ error: 'Account is not active' });
-      return;
-    }
-
-    const token = jwt.sign({ sub: user.id, email: user.email }, JWT_SECRET, {
-      expiresIn: JWT_EXPIRES_IN,
-    });
-    setSessionCookie(res, token, remember);
-    res.json({
-      user: { id: user.id, email: user.email, properties: parseUserProperties(user), created_at: user.created_at, public_key: user.public_key },
-      wrapped_content_key: user.wrapped_content_key ?? null,
-    });
-    return;
-  }
-
-  // ── Legacy path (bcrypt) — only for accounts without an Ed25519 public key ──
-  if (!password || typeof password !== 'string') {
-    res.status(400).json({ error: 'email and password hash are required' });
-    return;
-  }
-  if (!isSha256Hex(password)) {
-    res.status(400).json({ error: 'Invalid password hash format' });
+  if (!clientNonce || typeof clientNonce !== 'string' || typeof signature !== 'string') {
+    res.status(400).json({ error: 'nonce and signature are required' });
     return;
   }
 
   const user = registryStmts.getUserByEmail.get(normalizedEmail) as UserRow | undefined;
 
-  // Use a constant-time comparison path to avoid user-enumeration via timing.
-  const passwordHash = user?.password_hash ?? '$2a$12$invalidhashfortimingnormalization';
-  const valid = await bcrypt.compare(password, passwordHash);
+  if (!user || !user.public_key) {
+    res.status(401).json({ error: 'Invalid credentials' });
+    return;
+  }
 
-  if (!user || !valid) {
-    res.status(401).json({ error: 'Invalid email or password' });
+  const stored = nonceStore.get(normalizedEmail);
+  if (!stored || stored.consumed || stored.expiresAt < Date.now() || stored.nonce !== clientNonce) {
+    res.status(401).json({ error: 'Invalid or expired nonce' });
+    return;
+  }
+  stored.consumed = true;
+
+  let valid = false;
+  try {
+    const sigBytes = Buffer.from(signature, 'base64');
+    const pubKeyBytes = Buffer.from(user.public_key, 'base64');
+    const msgBytes = Buffer.from(clientNonce, 'utf8');
+    valid = ed25519.verify(sigBytes, msgBytes, pubKeyBytes);
+  } catch {
+    valid = false;
+  }
+
+  if (!valid) {
+    res.status(401).json({ error: 'Invalid credentials' });
     return;
   }
 
@@ -357,7 +276,7 @@ authRouter.post('/login', authLimiter, async (req: Request, res: Response) => {
 
   setSessionCookie(res, token, remember);
   res.json({
-    user: { id: user.id, email: user.email, properties: parseUserProperties(user), created_at: user.created_at, public_key: user.public_key ?? null },
+    user: { id: user.id, email: user.email, properties: parseUserProperties(user), created_at: user.created_at, public_key: user.public_key },
     wrapped_content_key: user.wrapped_content_key ?? null,
   });
 });
@@ -365,16 +284,15 @@ authRouter.post('/login', authLimiter, async (req: Request, res: Response) => {
 // ---------------------------------------------------------------------------
 // POST /api/auth/login/token — for Tauri / API clients
 //
-// Same dual-path logic as /login but returns the JWT in the response body
+// Same logic as /login but returns the JWT in the response body
 // instead of setting an HttpOnly cookie.  Used by the Tauri desktop app,
 // which cannot rely on the WebView cookie jar for cross-origin requests.
 // ---------------------------------------------------------------------------
 authRouter.post('/login/token', authLimiter, async (req: Request, res: Response) => {
-  const { email, signature, nonce: clientNonce, password } = req.body as {
+  const { email, signature, nonce: clientNonce } = req.body as {
     email?: string;
     signature?: string;
     nonce?: string;
-    password?: string;
   };
 
   if (!email || typeof email !== 'string') {
@@ -383,75 +301,37 @@ authRouter.post('/login/token', authLimiter, async (req: Request, res: Response)
   }
   const normalizedEmail = email.trim().toLowerCase();
 
-  // ── ZK path ──────────────────────────────────────────────────────────────
-  if (signature !== undefined) {
-    if (!clientNonce || typeof clientNonce !== 'string' || typeof signature !== 'string') {
-      res.status(400).json({ error: 'nonce and signature are required for ZK login' });
-      return;
-    }
-
-    const user = registryStmts.getUserByEmail.get(normalizedEmail) as UserRow | undefined;
-
-    if (!user || !user.public_key) {
-      res.status(401).json({ error: 'Invalid credentials' });
-      return;
-    }
-
-    const stored = nonceStore.get(normalizedEmail);
-    if (!stored || stored.consumed || stored.expiresAt < Date.now() || stored.nonce !== clientNonce) {
-      res.status(401).json({ error: 'Invalid or expired nonce' });
-      return;
-    }
-    stored.consumed = true;
-
-    let valid = false;
-    try {
-      const sigBytes = Buffer.from(signature, 'base64');
-      const pubKeyBytes = Buffer.from(user.public_key, 'base64');
-      const msgBytes = Buffer.from(clientNonce, 'utf8');
-      valid = ed25519.verify(sigBytes, msgBytes, pubKeyBytes);
-    } catch {
-      valid = false;
-    }
-
-    if (!valid) {
-      res.status(401).json({ error: 'Invalid credentials' });
-      return;
-    }
-
-    if (user.status !== 'active') {
-      res.status(403).json({ error: 'Account is not active' });
-      return;
-    }
-
-    const token = jwt.sign({ sub: user.id, email: user.email }, JWT_SECRET, {
-      expiresIn: JWT_EXPIRES_IN,
-    });
-    res.json({
-      user: { id: user.id, email: user.email, properties: parseUserProperties(user), created_at: user.created_at, public_key: user.public_key },
-      wrapped_content_key: user.wrapped_content_key ?? null,
-      token,
-    });
-    return;
-  }
-
-  // ── Legacy path (bcrypt) ─────────────────────────────────────────────────
-  if (!password || typeof password !== 'string') {
-    res.status(400).json({ error: 'email and password hash are required' });
-    return;
-  }
-  if (!isSha256Hex(password)) {
-    res.status(400).json({ error: 'Invalid password hash format' });
+  if (!clientNonce || typeof clientNonce !== 'string' || typeof signature !== 'string') {
+    res.status(400).json({ error: 'nonce and signature are required' });
     return;
   }
 
   const user = registryStmts.getUserByEmail.get(normalizedEmail) as UserRow | undefined;
 
-  const passwordHash = user?.password_hash ?? '$2a$12$invalidhashfortimingnormalization';
-  const valid = await bcrypt.compare(password, passwordHash);
+  if (!user || !user.public_key) {
+    res.status(401).json({ error: 'Invalid credentials' });
+    return;
+  }
 
-  if (!user || !valid) {
-    res.status(401).json({ error: 'Invalid email or password' });
+  const stored = nonceStore.get(normalizedEmail);
+  if (!stored || stored.consumed || stored.expiresAt < Date.now() || stored.nonce !== clientNonce) {
+    res.status(401).json({ error: 'Invalid or expired nonce' });
+    return;
+  }
+  stored.consumed = true;
+
+  let valid = false;
+  try {
+    const sigBytes = Buffer.from(signature, 'base64');
+    const pubKeyBytes = Buffer.from(user.public_key, 'base64');
+    const msgBytes = Buffer.from(clientNonce, 'utf8');
+    valid = ed25519.verify(sigBytes, msgBytes, pubKeyBytes);
+  } catch {
+    valid = false;
+  }
+
+  if (!valid) {
+    res.status(401).json({ error: 'Invalid credentials' });
     return;
   }
 
@@ -465,7 +345,7 @@ authRouter.post('/login/token', authLimiter, async (req: Request, res: Response)
   });
 
   res.json({
-    user: { id: user.id, email: user.email, properties: parseUserProperties(user), created_at: user.created_at, public_key: user.public_key ?? null },
+    user: { id: user.id, email: user.email, properties: parseUserProperties(user), created_at: user.created_at, public_key: user.public_key },
     wrapped_content_key: user.wrapped_content_key ?? null,
     token,
   });
@@ -474,97 +354,19 @@ authRouter.post('/login/token', authLimiter, async (req: Request, res: Response)
 // ---------------------------------------------------------------------------
 // POST /api/auth/reset-request
 //
-// Enumeration-safe endpoint: always returns 202. If the account exists, creates
-// a one-time token and attempts to email a reset link.
+// Deprecated: password-hash reset flow removed with legacy auth.
 // ---------------------------------------------------------------------------
-authRouter.post('/reset-request', authLimiter, async (req: Request, res: Response) => {
-  const { email } = req.body as { email?: string };
-
-  if (!email || typeof email !== 'string' || !email.includes('@')) {
-    res.status(400).json({ error: 'Valid email is required' });
-    return;
-  }
-
-  const normalizedEmail = email.trim().toLowerCase();
-  const user = registryStmts.getUserByEmail.get(normalizedEmail) as UserRow | undefined;
-
-  if (user) {
-    const rawToken = randomBytes(32).toString('hex');
-    const now = Date.now();
-    registryStmts.insertCredentialResetToken.run({
-      id: randomUUID(),
-      user_id: user.id,
-      token_hash: sha256Hex(rawToken),
-      created_at: now,
-      expires_at: now + RESET_TOKEN_TTL_MS,
-    });
-
-    try {
-      await sendCredentialResetEmail(user.email, rawToken);
-    } catch (err) {
-      console.warn('[auth] reset-request email failed:', err);
-    }
-  }
-
-  res.status(202).json({ ok: true, message: 'If that account exists, a reset email has been sent.' });
+authRouter.post('/reset-request', authLimiter, (_req: Request, res: Response) => {
+  res.status(410).json({ error: 'Password reset is no longer supported. Use key-based account recovery from a trusted device.' });
 });
 
 // ---------------------------------------------------------------------------
 // POST /api/auth/reset-confirm
 //
-// Scaffold implementation for SN209. Confirms a one-time reset token,
-// re-seeds account auth with a new password hash, and clears account crypto
-// key wrappers so the account must be re-bootstrapped from a trusted device.
+// Deprecated: password-hash reset flow removed with legacy auth.
 // ---------------------------------------------------------------------------
-authRouter.post('/reset-confirm', authLimiter, async (req: Request, res: Response) => {
-  const { token, new_password, confirm_wipe } = req.body as {
-    token?: string;
-    new_password?: string;
-    confirm_wipe?: boolean;
-  };
-
-  if (!token || typeof token !== 'string') {
-    res.status(400).json({ error: 'token is required' });
-    return;
-  }
-  if (!new_password || typeof new_password !== 'string' || !isSha256Hex(new_password)) {
-    res.status(400).json({ error: 'new_password must be a lowercase SHA-256 hex digest' });
-    return;
-  }
-  if (confirm_wipe !== true) {
-    res.status(400).json({ error: 'confirm_wipe must be true' });
-    return;
-  }
-
-  const tokenRow = registryStmts.getCredentialResetTokenByHash.get(sha256Hex(token)) as CredentialResetTokenRow | undefined;
-
-  if (!tokenRow || tokenRow.consumed_at != null || tokenRow.expires_at < Date.now()) {
-    res.status(410).json({ error: 'Reset token is invalid, expired, or already used' });
-    return;
-  }
-
-  const user = registryStmts.getUserById.get(tokenRow.user_id) as UserRow | undefined;
-  if (!user) {
-    res.status(410).json({ error: 'Reset token is invalid, expired, or already used' });
-    return;
-  }
-
-  const newPasswordHash = await bcrypt.hash(new_password, 12);
-  const now = Date.now();
-
-  withRegistryTransaction(() => {
-    registryStmts.updateUserForCredentialReset.run({
-      id: user.id,
-      password_hash: newPasswordHash,
-    });
-    registryStmts.consumeCredentialResetToken.run(now, tokenRow.id);
-    registryStmts.deleteCredentialResetTokensForUser.run(user.id);
-  });
-
-  // Best-effort: clear current browser cookie. Full global session invalidation
-  // requires stateful session versioning and is tracked separately.
-  res.clearCookie(SESSION_COOKIE, COOKIE_BASE);
-  res.status(204).send();
+authRouter.post('/reset-confirm', authLimiter, (_req: Request, res: Response) => {
+  res.status(410).json({ error: 'Password reset is no longer supported. Use key-based account recovery from a trusted device.' });
 });
 
 // ---------------------------------------------------------------------------

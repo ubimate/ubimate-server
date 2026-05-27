@@ -1,16 +1,12 @@
 import express from 'express';
 import cookieParser from 'cookie-parser';
 import { AddressInfo } from 'net';
-import { createHash, randomUUID, randomBytes } from 'crypto';
+import { randomUUID, randomBytes } from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ed25519 } from '@noble/curves/ed25519.js';
-
-function hashPassword(password: string): string {
-  return createHash('sha256').update(password, 'utf8').digest('hex');
-}
 
 /**
  * Generate a raw Ed25519 keypair for test fixtures (no Argon2id; the tests
@@ -92,20 +88,19 @@ describe('auth router', () => {
     vi.resetModules();
   });
 
-  it('registers an invited account and can issue a login token (legacy bcrypt path)', async () => {
+  it('registers an invited account and can issue a login token (ZK path)', async () => {
     const email = 'alice@example.com';
-    const password = 'CreateAccount123!';
-    const passwordHash = hashPassword(password);
+    const keypair = generateTestKeypair();
 
     const registerRes = await fetch(`${baseUrl}/api/auth/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         email,
-        password: passwordHash,
         name: 'Alice Example',
         invitationToken: 'invite-token-123',
-        // No publicKey — simulates a legacy (pre-ZK) account for this test
+        publicKey: keypair.publicKeyBase64,
+        wrappedContentKey: 'wrapped-key-base64',
       }),
     });
 
@@ -116,7 +111,7 @@ describe('auth router', () => {
     };
     expect(registerBody.user.email).toBe(email);
     expect(registerBody.user.properties).toEqual({ name: 'Alice Example' });
-    expect(registerBody.user.public_key).toBeNull();
+    expect(registerBody.user.public_key).toBe(keypair.publicKeyBase64);
 
     const { registryStmts, parseUserProperties } = await import('../db/registry');
     const userRow = registryStmts.getUserByEmail.get(email) as {
@@ -124,26 +119,30 @@ describe('auth router', () => {
       public_key: string | null;
       wrapped_content_key: string | null;
       properties: string;
-      password_hash: string;
     } | undefined;
     expect(userRow).toBeDefined();
     expect(userRow?.status).toBe('active');
     expect(parseUserProperties(userRow as never)).toEqual({ name: 'Alice Example' });
-    expect(userRow?.password_hash).not.toBe(passwordHash);
+    expect(userRow?.public_key).toBe(keypair.publicKeyBase64);
+    expect(userRow?.wrapped_content_key).toBe('wrapped-key-base64');
 
     const invitationRow = registryStmts.getInvitationByToken.get('invite-token-123') as { accepted_at: number | null } | undefined;
     expect(invitationRow?.accepted_at).not.toBeNull();
 
+    const challengeRes = await fetch(`${baseUrl}/api/auth/challenge?email=${encodeURIComponent(email)}`);
+    const { nonce } = await challengeRes.json() as { nonce: string };
+    const signature = keypair.sign(nonce);
+
     const loginRes = await fetch(`${baseUrl}/api/auth/login/token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password: passwordHash }),
+      body: JSON.stringify({ email, nonce, signature }),
     });
 
     expect(loginRes.status).toBe(200);
     const loginBody = await loginRes.json() as { token: string; wrapped_content_key: string | null };
     expect(typeof loginBody.token).toBe('string');
-    expect(loginBody.wrapped_content_key).toBeNull();
+    expect(loginBody.wrapped_content_key).toBe('wrapped-key-base64');
   });
 
   it('GET /challenge returns a nonce and reflects has_zk_keys correctly', async () => {
@@ -165,7 +164,6 @@ describe('auth router', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         email,
-        password: hashPassword('passphrase'),
         name: 'Alice',
         invitationToken: 'invite-token-123',
         publicKey: keypair.publicKeyBase64,
@@ -191,7 +189,6 @@ describe('auth router', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         email,
-        password: hashPassword('passphrase'),
         name: 'Alice',
         invitationToken: 'invite-token-123',
         publicKey: keypair.publicKeyBase64,
@@ -233,7 +230,6 @@ describe('auth router', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         email,
-        password: hashPassword('passphrase'),
         invitationToken: 'invite-token-123',
         publicKey: keypair.publicKeyBase64,
         wrappedContentKey: 'wrapped-key-base64',
@@ -265,7 +261,6 @@ describe('auth router', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         email,
-        password: hashPassword('passphrase'),
         invitationToken: 'invite-token-123',
         publicKey: keypair.publicKeyBase64,
         wrappedContentKey: 'wrapped-key-base64',
@@ -302,7 +297,6 @@ describe('auth router', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         email,
-        password: hashPassword('passphrase'),
         invitationToken: 'invite-token-123',
         publicKey: keypair.publicKeyBase64,
         wrappedContentKey: 'wrapped-key-base64',
@@ -323,33 +317,18 @@ describe('auth router', () => {
     expect(loginRes.status).toBe(401);
   });
 
-  it('ZK login — rejects when account has no public key', async () => {
+  it('register rejects missing public key/wrapped key', async () => {
     const email = 'alice@example.com';
 
-    // Register WITHOUT a public key (legacy account)
-    await fetch(`${baseUrl}/api/auth/register`, {
+    const res = await fetch(`${baseUrl}/api/auth/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         email,
-        password: hashPassword('passphrase'),
         invitationToken: 'invite-token-123',
       }),
     });
-
-    const challengeRes = await fetch(`${baseUrl}/api/auth/challenge?email=${encodeURIComponent(email)}`);
-    const { nonce } = await challengeRes.json() as { nonce: string };
-
-    // Sign with any keypair — should be rejected because no public_key is stored
-    const attacker = generateTestKeypair();
-    const sig = attacker.sign(nonce);
-
-    const loginRes = await fetch(`${baseUrl}/api/auth/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, nonce, signature: sig }),
-    });
-    expect(loginRes.status).toBe(401);
+    expect(res.status).toBe(400);
   });
 
   // ── ZK #5: expires_at enforcement & sender info in registration response ──
@@ -371,9 +350,10 @@ describe('auth router', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         email: 'expiredtest@example.com',
-        password: hashPassword('passphrase'),
         name: 'Expired User',
         invitationToken: 'expired-invite-token',
+        publicKey: generateTestKeypair().publicKeyBase64,
+        wrappedContentKey: 'wrapped-key-base64',
       }),
     });
 
@@ -413,9 +393,10 @@ describe('auth router', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         email,
-        password: hashPassword('passphrase'),
         name: 'Signed User',
         invitationToken: token,
+        publicKey: generateTestKeypair().publicKeyBase64,
+        wrappedContentKey: 'wrapped-key-base64',
       }),
     });
 
@@ -436,9 +417,10 @@ describe('auth router', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         email: 'alice@example.com',
-        password: hashPassword('passphrase'),
         name: 'Alice',
         invitationToken: 'invite-token-123',
+        publicKey: generateTestKeypair().publicKeyBase64,
+        wrappedContentKey: 'wrapped-key-base64',
       }),
     });
 
@@ -447,98 +429,29 @@ describe('auth router', () => {
     expect(body.invitation).toBeUndefined();
   });
 
-  it('reset-request is enumeration-safe', async () => {
+  it('reset-request is deprecated', async () => {
     const existingRes = await fetch(`${baseUrl}/api/auth/reset-request`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email: 'alice@example.com' }),
     });
-    expect(existingRes.status).toBe(202);
+    expect(existingRes.status).toBe(410);
 
     const unknownRes = await fetch(`${baseUrl}/api/auth/reset-request`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email: 'nobody@example.com' }),
     });
-    expect(unknownRes.status).toBe(202);
-
-    const existingBody = await existingRes.json() as { ok: boolean; message: string };
-    const unknownBody = await unknownRes.json() as { ok: boolean; message: string };
-    expect(existingBody).toEqual(unknownBody);
+    expect(unknownRes.status).toBe(410);
   });
 
-  it('reset-confirm updates auth secret and clears account crypto keys', async () => {
-    const email = 'alice@example.com';
-    const oldPasswordHash = hashPassword('old-passphrase');
-    const newPasswordHash = hashPassword('new-passphrase');
-    const keypair = generateTestKeypair();
-
-    const registerRes = await fetch(`${baseUrl}/api/auth/register`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        email,
-        password: oldPasswordHash,
-        invitationToken: 'invite-token-123',
-        publicKey: keypair.publicKeyBase64,
-        wrappedContentKey: 'wrapped-key-base64',
-      }),
-    });
-    expect(registerRes.status).toBe(201);
-
-    const { registryStmts } = await import('../db/registry');
-    const userRow = registryStmts.getUserByEmail.get(email) as { id: string };
-
+  it('reset-confirm is deprecated', async () => {
     const resetToken = 'f'.repeat(64);
-    registryStmts.insertCredentialResetToken.run({
-      id: randomUUID(),
-      user_id: userRow.id,
-      token_hash: createHash('sha256').update(resetToken, 'utf8').digest('hex'),
-      created_at: Date.now(),
-      expires_at: Date.now() + 60_000,
-    });
-
     const confirmRes = await fetch(`${baseUrl}/api/auth/reset-confirm`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token: resetToken, new_password: newPasswordHash, confirm_wipe: true }),
+      body: JSON.stringify({ token: resetToken, new_password: 'irrelevant', confirm_wipe: true }),
     });
-    expect(confirmRes.status).toBe(204);
-
-    // Token must be one-time use.
-    const confirmAgainRes = await fetch(`${baseUrl}/api/auth/reset-confirm`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token: resetToken, new_password: newPasswordHash, confirm_wipe: true }),
-    });
-    expect(confirmAgainRes.status).toBe(410);
-
-    const refreshedUser = registryStmts.getUserByEmail.get(email) as {
-      public_key: string | null;
-      wrapped_content_key: string | null;
-    };
-    expect(refreshedUser.public_key).toBeNull();
-    expect(refreshedUser.wrapped_content_key).toBeNull();
-
-    // Old auth hash no longer works.
-    const oldLoginRes = await fetch(`${baseUrl}/api/auth/login/token`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password: oldPasswordHash }),
-    });
-    expect(oldLoginRes.status).toBe(401);
-
-    // New auth hash works via legacy path after reset.
-    const newLoginRes = await fetch(`${baseUrl}/api/auth/login/token`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password: newPasswordHash }),
-    });
-    expect(newLoginRes.status).toBe(200);
-
-    // ZK key presence should now be false.
-    const challengeRes = await fetch(`${baseUrl}/api/auth/challenge?email=${encodeURIComponent(email)}`);
-    const challengeBody = await challengeRes.json() as { has_zk_keys: boolean };
-    expect(challengeBody.has_zk_keys).toBe(false);
+    expect(confirmRes.status).toBe(410);
   });
 });
