@@ -205,6 +205,33 @@ documentsRouter.put('/:id', (req: Request, res: Response) => {
   };
 
   stmts.updateDocument.run(updated);
+
+  // Clean up the superseded upload file when `src` changes on a media document.
+  // The file is immutable (UUID-named), so it can be deleted as soon as the
+  // reference is replaced.  Only applies to server-hosted uploads (/uploads/…).
+  if (properties !== undefined && (updated.type === 'image' || updated.type === 'file')) {
+    try {
+      const oldProps = JSON.parse(existing.properties) as Record<string, unknown>;
+      const oldSrc = typeof oldProps.src === 'string' ? oldProps.src : null;
+      const newSrc = typeof (properties as Record<string, unknown>).src === 'string'
+        ? (properties as Record<string, unknown>).src as string
+        : null;
+      if (oldSrc && oldSrc !== newSrc && oldSrc.startsWith('/uploads/')) {
+        const filename = path.basename(oldSrc);
+        if (filename && !filename.includes('..')) {
+          const filePath = path.join(DATA_DIR, 'uploads', req.userId, filename);
+          fs.unlink(filePath, (err) => {
+            if (err && err.code !== 'ENOENT') {
+              console.error(`[uploads] Failed to delete replaced file ${filePath}:`, err.message);
+            }
+          });
+        }
+      }
+    } catch {
+      // Malformed JSON — skip silently.
+    }
+  }
+
   broadcastTreeChanged(req.userId);
   res.json(toOut({ ...updated, created_at: existing.created_at }));
 });
