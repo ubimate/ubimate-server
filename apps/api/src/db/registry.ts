@@ -8,10 +8,12 @@ import path from 'path';
 import fs from 'fs';
 
 const DATA_DIR = process.env.DATA_DIR ?? path.join(__dirname, '../../data');
+const SQLITE_BUSY_TIMEOUT_MS = Number(process.env.SQLITE_BUSY_TIMEOUT_MS ?? 5000);
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
 const registryDb = new Database(path.join(DATA_DIR, 'registry.db'));
 registryDb.pragma('journal_mode = WAL');
+registryDb.pragma(`busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
 registryDb.pragma('foreign_keys = ON');
 
 registryDb.exec(`

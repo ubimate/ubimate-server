@@ -6,6 +6,7 @@ import type { Statement } from 'better-sqlite3';
 // ---------------------------------------------------------------------------
 
 export const COMPACT_THRESHOLD = 100;
+const SQLITE_BUSY_TIMEOUT_MS = Number(process.env.SQLITE_BUSY_TIMEOUT_MS ?? 5000);
 
 // ---------------------------------------------------------------------------
 // Types
@@ -326,6 +327,7 @@ function runMigrations(db: Database.Database): void {
 export function initUserDb(dbPath: string): UserDbHandle {
   const db = new Database(dbPath);
   db.pragma('journal_mode = WAL');
+  db.pragma(`busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
   db.pragma('foreign_keys = ON');
 
   db.exec(SCHEMA_SQL);
