@@ -59,7 +59,7 @@ All configuration is via environment variables. Copy `.env.example` to `.env` an
 |----------|----------|-------------|
 | `JWT_SECRET` | Yes | Long random string used to sign auth tokens |
 | `APP_URL` | Yes | Public URL of this server (used in emails) |
-| `CORS_ORIGIN` | No | Browser origin(s) to allow via CORS. Not needed for self-hosting — the Tauri desktop app origins are always permitted. Only relevant if you are also serving the Ubimate web app from a browser. |
+| `CORS_ORIGIN` | No | Browser origin(s) to allow via CORS. Not needed for self-hosting |
 | `ADMIN_USERNAME` | Yes | Admin account created on first run |
 | `ADMIN_PASSWORD` | Yes | Admin account password |
 | `ADMIN_EMAIL` | Yes | Admin account email |
