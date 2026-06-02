@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Ubimate. Licensed under the Elastic License 2.0 (ELv2).
+// See LICENSE in the project root for details.
+
 import { Server, onLoadDocumentPayload, onChangePayload, onAuthenticatePayload, onConnectPayload, onDisconnectPayload } from '@hocuspocus/server';
 import * as Y from 'yjs';
 import jwt from 'jsonwebtoken';

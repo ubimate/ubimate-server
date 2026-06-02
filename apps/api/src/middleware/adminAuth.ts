@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Ubimate. Licensed under the Elastic License 2.0 (ELv2).
+// See LICENSE in the project root for details.
+
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';

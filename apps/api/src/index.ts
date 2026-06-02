@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Ubimate. Licensed under the Elastic License 2.0 (ELv2).
+// See LICENSE in the project root for details.
+
 import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
