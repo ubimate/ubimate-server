@@ -103,14 +103,15 @@ describe('auth router', () => {
         name: 'Alice Example',
         invitationToken: 'invite-token-123',
         publicKey: keypair.publicKeyBase64,
-        wrappedContentKey: 'wrapped-key-base64',
+        initialWorkspaceId: randomUUID(),
+        initialWrappedWorkspaceKey: 'wrapped-key-base64',
       }),
     });
 
     expect(registerRes.status).toBe(201);
     const registerBody = await registerRes.json() as {
       user: { id: string; email: string; properties: Record<string, unknown>; public_key: string | null };
-      wrapped_content_key: string | null;
+      workspace_keys: { workspace_id: string; wrapped_key: string }[];
     };
     expect(registerBody.user.email).toBe(email);
     expect(registerBody.user.properties).toEqual({ name: 'Alice Example' });
@@ -120,14 +121,14 @@ describe('auth router', () => {
     const userRow = registryStmts.getUserByEmail.get(email) as {
       status: string;
       public_key: string | null;
-      wrapped_content_key: string | null;
       properties: string;
     } | undefined;
     expect(userRow).toBeDefined();
     expect(userRow?.status).toBe('active');
     expect(parseUserProperties(userRow as never)).toEqual({ name: 'Alice Example' });
     expect(userRow?.public_key).toBe(keypair.publicKeyBase64);
-    expect(userRow?.wrapped_content_key).toBe('wrapped-key-base64');
+    const wsKeys = registryStmts.listWorkspaceKeysForUser.all(registerBody.user.id) as { wrapped_key: string }[];
+    expect(wsKeys[0]?.wrapped_key).toBe('wrapped-key-base64');
 
     const invitationRow = registryStmts.getInvitationByToken.get('invite-token-123') as { accepted_at: number | null } | undefined;
     expect(invitationRow?.accepted_at).not.toBeNull();
@@ -143,9 +144,9 @@ describe('auth router', () => {
     });
 
     expect(loginRes.status).toBe(200);
-    const loginBody = await loginRes.json() as { token: string; wrapped_content_key: string | null };
+    const loginBody = await loginRes.json() as { token: string; workspace_keys: { workspace_id: string; wrapped_key: string }[] };
     expect(typeof loginBody.token).toBe('string');
-    expect(loginBody.wrapped_content_key).toBe('wrapped-key-base64');
+    expect(loginBody.workspace_keys[0]?.wrapped_key).toBe('wrapped-key-base64');
   });
 
   it('GET /challenge returns a nonce and reflects has_zk_keys correctly', async () => {
@@ -170,7 +171,8 @@ describe('auth router', () => {
         name: 'Alice',
         invitationToken: 'invite-token-123',
         publicKey: keypair.publicKeyBase64,
-        wrappedContentKey: 'wrapped-key-base64',
+        initialWorkspaceId: randomUUID(),
+        initialWrappedWorkspaceKey: 'wrapped-key-base64',
       }),
     });
 
@@ -195,7 +197,8 @@ describe('auth router', () => {
         name: 'Alice',
         invitationToken: 'invite-token-123',
         publicKey: keypair.publicKeyBase64,
-        wrappedContentKey: 'wrapped-key-base64',
+        initialWorkspaceId: randomUUID(),
+        initialWrappedWorkspaceKey: 'wrapped-key-base64',
       }),
     });
     expect(registerRes.status).toBe(201);
@@ -215,11 +218,11 @@ describe('auth router', () => {
     expect(loginRes.status).toBe(200);
     const loginBody = await loginRes.json() as {
       user: { email: string; public_key: string | null };
-      wrapped_content_key: string | null;
+      workspace_keys: { workspace_id: string; wrapped_key: string }[];
     };
     expect(loginBody.user.email).toBe(email);
     expect(loginBody.user.public_key).toBe(keypair.publicKeyBase64);
-    expect(loginBody.wrapped_content_key).toBe('wrapped-key-base64');
+    expect(loginBody.workspace_keys[0]?.wrapped_key).toBe('wrapped-key-base64');
     // HttpOnly cookie should be set
     expect(loginRes.headers.get('set-cookie')).toContain('nf_session');
   });
@@ -235,7 +238,8 @@ describe('auth router', () => {
         email,
         invitationToken: 'invite-token-123',
         publicKey: keypair.publicKeyBase64,
-        wrappedContentKey: 'wrapped-key-base64',
+        initialWorkspaceId: randomUUID(),
+        initialWrappedWorkspaceKey: 'wrapped-key-base64',
       }),
     });
 
@@ -250,9 +254,9 @@ describe('auth router', () => {
     });
 
     expect(tokenRes.status).toBe(200);
-    const tokenBody = await tokenRes.json() as { token: string; wrapped_content_key: string | null };
+    const tokenBody = await tokenRes.json() as { token: string; workspace_keys: { workspace_id: string; wrapped_key: string }[] };
     expect(typeof tokenBody.token).toBe('string');
-    expect(tokenBody.wrapped_content_key).toBe('wrapped-key-base64');
+    expect(tokenBody.workspace_keys[0]?.wrapped_key).toBe('wrapped-key-base64');
   });
 
   it('ZK login — rejects a replayed nonce', async () => {
@@ -266,7 +270,8 @@ describe('auth router', () => {
         email,
         invitationToken: 'invite-token-123',
         publicKey: keypair.publicKeyBase64,
-        wrappedContentKey: 'wrapped-key-base64',
+        initialWorkspaceId: randomUUID(),
+        initialWrappedWorkspaceKey: 'wrapped-key-base64',
       }),
     });
 
@@ -302,7 +307,8 @@ describe('auth router', () => {
         email,
         invitationToken: 'invite-token-123',
         publicKey: keypair.publicKeyBase64,
-        wrappedContentKey: 'wrapped-key-base64',
+        initialWorkspaceId: randomUUID(),
+        initialWrappedWorkspaceKey: 'wrapped-key-base64',
       }),
     });
 
@@ -356,7 +362,8 @@ describe('auth router', () => {
         name: 'Expired User',
         invitationToken: 'expired-invite-token',
         publicKey: generateTestKeypair().publicKeyBase64,
-        wrappedContentKey: 'wrapped-key-base64',
+        initialWorkspaceId: randomUUID(),
+        initialWrappedWorkspaceKey: 'wrapped-key-base64',
       }),
     });
 
@@ -399,7 +406,8 @@ describe('auth router', () => {
         name: 'Signed User',
         invitationToken: token,
         publicKey: generateTestKeypair().publicKeyBase64,
-        wrappedContentKey: 'wrapped-key-base64',
+        initialWorkspaceId: randomUUID(),
+        initialWrappedWorkspaceKey: 'wrapped-key-base64',
       }),
     });
 
@@ -423,7 +431,8 @@ describe('auth router', () => {
         name: 'Alice',
         invitationToken: 'invite-token-123',
         publicKey: generateTestKeypair().publicKeyBase64,
-        wrappedContentKey: 'wrapped-key-base64',
+        initialWorkspaceId: randomUUID(),
+        initialWrappedWorkspaceKey: 'wrapped-key-base64',
       }),
     });
 
