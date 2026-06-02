@@ -9,6 +9,7 @@ import { uploadsRouter } from './routes/uploads';
 import { authRouter } from './routes/auth';
 import { unfurlRouter } from './routes/unfurl';
 import { adminRouter } from './routes/admin';
+import { workspacesRouter } from './routes/workspaces';
 import { hocuspocus } from './hocuspocus';
 
 const NO_IMAGE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 150" width="200" height="150">
@@ -84,6 +85,7 @@ app.use('/api/admin', adminRouter);
 app.use('/api/documents', documentsRouter);
 app.use('/api/uploads', uploadsRouter);
 app.use('/api/unfurl', unfurlRouter);
+app.use('/api/workspaces', workspacesRouter);
 
 // Serve uploaded files as static assets (supports user subdirectories).
 app.use('/uploads', express.static(path.join(DATA_DIR, 'uploads')));

@@ -79,6 +79,14 @@ if (!cols.includes('wrapped_content_key')) {
   }
 }
 
+export interface WorkspaceKeyRow {
+  workspace_id: string;
+  user_id: string;
+  /** Base64-encoded sealed workspace content key. */
+  wrapped_key: string;
+  granted_at: number;
+}
+
 export interface UserRow {
   id: string;
   email: string;
@@ -117,6 +125,23 @@ registryDb.exec(`
 `);
 registryDb.exec(`
   CREATE UNIQUE INDEX IF NOT EXISTS idx_invitations_token ON invitations(token);
+`);
+
+// ---------------------------------------------------------------------------
+// workspace_keys table — per-workspace, per-user sealed content keys
+// ---------------------------------------------------------------------------
+
+registryDb.exec(`
+  CREATE TABLE IF NOT EXISTS workspace_keys (
+    workspace_id  TEXT    NOT NULL,
+    user_id       TEXT    NOT NULL,
+    wrapped_key   TEXT    NOT NULL,
+    granted_at    INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (workspace_id, user_id)
+  );
+`);
+registryDb.exec(`
+  CREATE INDEX IF NOT EXISTS idx_workspace_keys_user ON workspace_keys(user_id);
 `);
 
 // ---------------------------------------------------------------------------
@@ -181,6 +206,26 @@ export const registryStmts = {
   `),
   deleteUser: registryDb.prepare(`DELETE FROM users WHERE id = ?`),
   listUsers: registryDb.prepare(`SELECT id, email, properties, status, created_at FROM users`),
+
+  // Workspace keys
+  insertWorkspaceKey: registryDb.prepare(`
+    INSERT INTO workspace_keys (workspace_id, user_id, wrapped_key, granted_at)
+    VALUES (@workspace_id, @user_id, @wrapped_key, @granted_at)
+  `),
+  upsertWorkspaceKey: registryDb.prepare(`
+    INSERT INTO workspace_keys (workspace_id, user_id, wrapped_key, granted_at)
+    VALUES (@workspace_id, @user_id, @wrapped_key, @granted_at)
+    ON CONFLICT(workspace_id, user_id) DO UPDATE SET wrapped_key = excluded.wrapped_key
+  `),
+  getWorkspaceKeyForUser: registryDb.prepare(`
+    SELECT * FROM workspace_keys WHERE workspace_id = ? AND user_id = ?
+  `),
+  listWorkspaceKeysForUser: registryDb.prepare(`
+    SELECT * FROM workspace_keys WHERE user_id = ?
+  `),
+  deleteWorkspaceKeyForUser: registryDb.prepare(`
+    DELETE FROM workspace_keys WHERE workspace_id = ? AND user_id = ?
+  `),
 
   // Invitations
   insertInvitation: registryDb.prepare(`

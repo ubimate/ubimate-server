@@ -15,6 +15,7 @@ import type {
 } from '@ubimate/types';
 import { generateKeyBetween } from '@ubimate/utils';
 import { requireAuth } from '../middleware/auth';
+import { registryStmts } from '../db/registry';
 
 const DATA_DIR = process.env.DATA_DIR ?? path.join(__dirname, '../../data');
 
@@ -145,6 +146,7 @@ documentsRouter.get('/:id', (req: Request, res: Response) => {
 documentsRouter.post('/', (req: Request, res: Response) => {
   const { stmts } = req.userDbHandle;
   const { parent_id = null, type, properties = {} } = req.body as CreateDocumentPayload;
+  const { wrappedWorkspaceKey } = req.body as { wrappedWorkspaceKey?: string };
 
   // Derive position: place after the last sibling, or use the client-supplied value if present.
   const lastRow = stmts.lastSiblingPosition.get(parent_id) as { position: string } | undefined;
@@ -172,6 +174,17 @@ documentsRouter.post('/', (req: Request, res: Response) => {
   };
 
   stmts.insertDocument.run(doc);
+
+  // When a new workspace is created, persist the user's sealed copy of its content key.
+  if (type === 'workspace' && wrappedWorkspaceKey && typeof wrappedWorkspaceKey === 'string') {
+    registryStmts.insertWorkspaceKey.run({
+      workspace_id: doc.id,
+      user_id: req.userId,
+      wrapped_key: wrappedWorkspaceKey,
+      granted_at: now,
+    });
+  }
+
   broadcastTreeChanged(req.userId);
   res.status(201).json(toOut({ ...doc }));
 });

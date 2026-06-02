@@ -49,6 +49,13 @@ export interface CreateDocumentPayload {
   status?: number;
   /** Timestamp of the last status change; null when status has never changed. */
   status_timestamp?: number | null;
+  /**
+   * Per-workspace key migration (key-per-workspace model).
+   * When creating a workspace document, the client supplies its sealed copy
+   * of the workspace content key so the server can persist it in workspace_keys.
+   * Base64 crypto_box_seal(workspace_content_key, user.x25519PublicKey).
+   */
+  wrappedWorkspaceKey?: string;
 }
 
 /**
@@ -238,13 +245,23 @@ export interface AuthPayload {
   remember_me?: boolean;
 }
 
+/**
+ * One entry in the per-user workspace key bundle returned by auth endpoints.
+ * Each row is the user's own sealed copy of the workspace content key.
+ */
+export interface WorkspaceKey {
+  workspace_id: string;
+  /** Base64 crypto_box_seal(workspace_content_key, user.x25519PublicKey). */
+  wrapped_key: string;
+}
+
 /** Response of POST /api/auth/register and POST /api/auth/login */
 export interface AuthResponse {
   user: User;
   /**
-   * Base64-encoded sealed content key — nonce || ciphertext wrapped with the
-   * user's X25519 public key via crypto_box_seal. Only present for ZK-enabled
-   * accounts; null for pre-ZK accounts.
+   * Per-workspace sealed keys for all workspaces the user has access to.
+   * Empty for pre-ZK accounts or during the brief window before the initial
+   * workspace has been created.
    */
-  wrapped_content_key: string | null;
+  workspace_keys: WorkspaceKey[];
 }

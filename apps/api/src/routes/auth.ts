@@ -4,8 +4,9 @@ import jwt from 'jsonwebtoken';
 import rateLimit from 'express-rate-limit';
 import { ed25519 } from '@noble/curves/ed25519.js';
 import { registryStmts, parseUserProperties } from '../db/registry';
-import type { UserRow, InvitationRow } from '../db/registry';
+import type { UserRow, InvitationRow, WorkspaceKeyRow } from '../db/registry';
 import { JWT_SECRET, JWT_EXPIRES_IN, requireAuth } from '../middleware/auth';
+import { getUserDb } from '../db/userDb';
 import type { AuthPayload } from '@ubimate/types';
 
 export const authRouter = Router();
@@ -115,11 +116,12 @@ authRouter.get('/challenge', authLimiter, (req: Request, res: Response) => {
 // POST /api/auth/register
 // ---------------------------------------------------------------------------
 authRouter.post('/register', authLimiter, async (req: Request, res: Response) => {
-  const { email, name, invitationToken, publicKey, wrappedContentKey } = req.body as AuthPayload & {
+  const { email, name, invitationToken, publicKey, initialWorkspaceId, initialWrappedWorkspaceKey } = req.body as AuthPayload & {
     name?: string;
     invitationToken?: string;
     publicKey?: string;
-    wrappedContentKey?: string;
+    initialWorkspaceId?: string;
+    initialWrappedWorkspaceKey?: string;
   };
 
   if (name !== undefined && (typeof name !== 'string' || name.trim().length > 100)) {
@@ -134,8 +136,12 @@ authRouter.post('/register', authLimiter, async (req: Request, res: Response) =>
     res.status(400).json({ error: 'publicKey is required' });
     return;
   }
-  if (!wrappedContentKey || typeof wrappedContentKey !== 'string') {
-    res.status(400).json({ error: 'wrappedContentKey is required' });
+  if (!initialWorkspaceId || typeof initialWorkspaceId !== 'string') {
+    res.status(400).json({ error: 'initialWorkspaceId is required' });
+    return;
+  }
+  if (!initialWrappedWorkspaceKey || typeof initialWrappedWorkspaceKey !== 'string') {
+    res.status(400).json({ error: 'initialWrappedWorkspaceKey is required' });
     return;
   }
 
@@ -182,7 +188,31 @@ authRouter.post('/register', authLimiter, async (req: Request, res: Response) =>
     created_at: now,
     status: 'active',
     public_key: publicKey,
-    wrapped_content_key: wrappedContentKey,
+    wrapped_content_key: null,
+  });
+
+  // Create the initial workspace document in the user's per-user DB.
+  const userDb = getUserDb(userId);
+  userDb.stmts.insertDocument.run({
+    id: initialWorkspaceId,
+    parent_id: null,
+    type: 'workspace',
+    position: 'a0',
+    properties: '{}',
+    created_at: now,
+    updated_at: now,
+    last_struct_ts: now,
+    status: 0,
+    status_timestamp: null,
+    last_properties_ts: now,
+  });
+
+  // Persist the user's sealed copy of the workspace content key.
+  registryStmts.insertWorkspaceKey.run({
+    workspace_id: initialWorkspaceId,
+    user_id: userId,
+    wrapped_key: initialWrappedWorkspaceKey,
+    granted_at: now,
   });
 
   // Mark invitation as accepted
@@ -197,7 +227,7 @@ authRouter.post('/register', authLimiter, async (req: Request, res: Response) =>
   setSessionCookie(res, token);
   res.status(201).json({
     user: { id: userId, email: normalizedEmail, properties, created_at: now, public_key: publicKey },
-    wrapped_content_key: wrappedContentKey,
+    workspace_keys: [{ workspace_id: initialWorkspaceId, wrapped_key: initialWrappedWorkspaceKey }],
     ...(matchedInvitation?.sender_public_key && matchedInvitation?.sender_signature
       ? {
           invitation: {
@@ -275,9 +305,13 @@ authRouter.post('/login', authLimiter, async (req: Request, res: Response) => {
   });
 
   setSessionCookie(res, token, remember);
+  const workspaceKeys = (registryStmts.listWorkspaceKeysForUser.all(user.id) as WorkspaceKeyRow[]).map(k => ({
+    workspace_id: k.workspace_id,
+    wrapped_key: k.wrapped_key,
+  }));
   res.json({
     user: { id: user.id, email: user.email, properties: parseUserProperties(user), created_at: user.created_at, public_key: user.public_key },
-    wrapped_content_key: user.wrapped_content_key ?? null,
+    workspace_keys: workspaceKeys,
   });
 });
 
@@ -346,7 +380,10 @@ authRouter.post('/login/token', authLimiter, async (req: Request, res: Response)
 
   res.json({
     user: { id: user.id, email: user.email, properties: parseUserProperties(user), created_at: user.created_at, public_key: user.public_key },
-    wrapped_content_key: user.wrapped_content_key ?? null,
+    workspace_keys: (registryStmts.listWorkspaceKeysForUser.all(user.id) as WorkspaceKeyRow[]).map(k => ({
+      workspace_id: k.workspace_id,
+      wrapped_key: k.wrapped_key,
+    })),
     token,
   });
 });
@@ -388,7 +425,10 @@ authRouter.get('/me', requireAuth, (req: Request, res: Response) => {
   }
   res.json({
     user: { id: user.id, email: user.email, properties: parseUserProperties(user), created_at: user.created_at, public_key: user.public_key ?? null },
-    wrapped_content_key: user.wrapped_content_key ?? null,
+    workspace_keys: (registryStmts.listWorkspaceKeysForUser.all(user.id) as WorkspaceKeyRow[]).map(k => ({
+      workspace_id: k.workspace_id,
+      wrapped_key: k.wrapped_key,
+    })),
   });
 });
 
