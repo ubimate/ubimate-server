@@ -16,6 +16,8 @@ Self-hostable sync and collaboration server for [Ubimate](https://ubimate.com) â
 
 When self-hosted, Ubimate desktop/web clients connect to your instance instead of the Ubimate cloud.
 
+For a detailed explanation of the end-to-end encryption model and the Yjs-based sync protocol, see the [Ubimate technical whitepaper](https://ubimate.com/whitepaper.html).
+
 ---
 
 ## Requirements
