@@ -44,7 +44,7 @@ Point your Ubimate client at your server by setting the server URL in the app se
 
 ```bash
 pnpm install
-cp apps/api/.env.example apps/api/.env   # or copy from root .env.example
+cp .env.example apps/api/.env
 # Edit apps/api/.env
 pnpm dev
 ```

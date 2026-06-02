@@ -9,7 +9,7 @@ const SMTP_SECURE = process.env.SMTP_SECURE === 'true';
 const SMTP_USER = process.env.SMTP_USER;
 const SMTP_PASS = process.env.SMTP_PASS;
 const SMTP_FROM = process.env.SMTP_FROM ?? 'no-reply@app.ubimate.com';
-const APP_URL = process.env.APP_URL ?? 'https://app.app.ubimate.com';
+const APP_URL = process.env.APP_URL ?? 'https://app.ubimate.com';
 
 export const smtpConfigured = !!(SMTP_HOST && SMTP_USER && SMTP_PASS);
 

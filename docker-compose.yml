@@ -37,6 +37,9 @@ services:
       MAX_AUDIO_UPLOAD_MB: ${MAX_AUDIO_UPLOAD_MB:-50}
       MAX_VIDEO_UPLOAD_MB: ${MAX_VIDEO_UPLOAD_MB:-200}
 
+      # --- Optional: SQLite tuning ---
+      SQLITE_BUSY_TIMEOUT_MS: ${SQLITE_BUSY_TIMEOUT_MS:-5000}
+
     restart: unless-stopped
 
 volumes:
