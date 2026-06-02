@@ -3,7 +3,6 @@ services:
     build: .
     ports:
       - "${API_PORT:-3001}:3001"
-      - "1234:1234"
     volumes:
       - ubimate_data:/app/data
     environment:
@@ -13,12 +12,14 @@ services:
       # --- Required ---
       JWT_SECRET: ${JWT_SECRET}
       APP_URL: ${APP_URL}
-      CORS_ORIGIN: ${CORS_ORIGIN}
 
       # --- Admin account (created on first run) ---
       ADMIN_USERNAME: ${ADMIN_USERNAME}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
       ADMIN_EMAIL: ${ADMIN_EMAIL}
+
+      # --- Optional: browser CORS (not needed for the Tauri desktop app) ---
+      CORS_ORIGIN: ${CORS_ORIGIN:-}
 
       # --- Optional: email (leave blank to disable) ---
       SMTP_HOST: ${SMTP_HOST:-}

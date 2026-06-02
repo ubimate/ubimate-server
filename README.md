@@ -30,11 +30,11 @@ When self-hosted, Ubimate desktop/web clients connect to your instance instead o
 
 ```bash
 cp .env.example .env
-# Edit .env — at minimum set JWT_SECRET, APP_URL, CORS_ORIGIN, and the ADMIN_* vars
+# Edit .env — at minimum set JWT_SECRET, APP_URL, and the ADMIN_* vars
 docker compose up -d
 ```
 
-The REST API will be available on port **3001** and the Yjs WebSocket on port **1234**.
+The REST API and Yjs WebSocket will be available on port **3001**.
 
 Point your Ubimate client at your server by setting the server URL in the app settings.
 
@@ -59,7 +59,7 @@ All configuration is via environment variables. Copy `.env.example` to `.env` an
 |----------|----------|-------------|
 | `JWT_SECRET` | Yes | Long random string used to sign auth tokens |
 | `APP_URL` | Yes | Public URL of this server (used in emails) |
-| `CORS_ORIGIN` | Yes | URL of the Ubimate client (browser CORS policy) |
+| `CORS_ORIGIN` | No | Browser origin(s) to allow via CORS. Not needed for self-hosting — the Tauri desktop app origins are always permitted. Only relevant if you are also serving the Ubimate web app from a browser. |
 | `ADMIN_USERNAME` | Yes | Admin account created on first run |
 | `ADMIN_PASSWORD` | Yes | Admin account password |
 | `ADMIN_EMAIL` | Yes | Admin account email |
@@ -83,10 +83,50 @@ All configuration is via environment variables. Copy `.env.example` to `.env` an
 
 | Port | Protocol | Purpose |
 |------|----------|---------|
-| `3001` | HTTP | REST API |
-| `1234` | WebSocket | Yjs real-time sync (Hocuspocus) |
+| `3001` | HTTP + WebSocket | REST API (`/api/*`) and Yjs real-time sync (`/yjs`) |
 
-Both ports must be reachable from the Ubimate client. If you put the server behind a reverse proxy (nginx, Caddy), ensure the WebSocket port is also proxied.
+Both the REST API and the Hocuspocus WebSocket endpoint run on the **same port**. Your reverse proxy only needs to proxy one upstream.
+
+---
+
+## Reverse proxy / HTTPS
+
+Exposing port 3001 directly is fine for local development. For production, put a reverse proxy in front so clients connect over HTTPS/WSS on standard port 443.
+
+### Option A — Caddy (recommended, automatic TLS)
+
+```bash
+# Install Caddy: https://caddyserver.com/docs/install
+# Then copy deploy/Caddyfile, edit the domain, and run:
+sudo cp deploy/Caddyfile /etc/caddy/Caddyfile
+sudo systemctl reload caddy
+```
+
+See [`deploy/Caddyfile`](./deploy/Caddyfile) for the full config (it is two lines).
+
+### Option B — nginx + certbot
+
+```bash
+# Obtain certificate first
+sudo certbot --nginx -d your-server.example.com
+
+# Then copy and adapt the example config
+sudo cp deploy/nginx.conf /etc/nginx/sites-available/ubimate
+sudo ln -s /etc/nginx/sites-available/ubimate /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+See [`deploy/nginx.conf`](./deploy/nginx.conf) for the annotated example.
+
+### CORS_ORIGIN
+
+The Tauri desktop app origins (`tauri://localhost`, `https://tauri.localhost`) are **always allowed** regardless of `CORS_ORIGIN`. You only need to set it if you are also serving the Ubimate web app from a browser origin:
+
+```
+CORS_ORIGIN=https://app.your-client.example.com
+```
+
+Leave it unset for a desktop-only self-hosted setup.
 
 ---
 
@@ -112,6 +152,29 @@ pnpm dev          # starts the API server with hot-reload
 pnpm test         # runs the test suite
 pnpm build        # compiles TypeScript to dist/
 ```
+
+---
+
+## Upgrading
+
+Schema migrations run automatically on startup — no manual SQL steps required. To upgrade:
+
+```bash
+# 1. Back up your data directory first
+cp -r ./data ./data.bak-$(date +%Y%m%d)
+
+# Docker deployment
+docker compose pull
+docker compose up -d
+
+# Manual deployment
+git pull
+pnpm install
+pnpm build
+# then restart the process (systemd / pm2 / etc.)
+```
+
+The server records applied migrations in the `schema_version` table. If a startup migration fails, the server exits immediately so your data is never left in a partially-migrated state; restore from backup and file an issue.
 
 ---
 

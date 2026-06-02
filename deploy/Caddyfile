@@ -1,0 +1,11 @@
+# Caddyfile — reverse proxy for ubimate-server
+#
+# Caddy automatically obtains and renews TLS certificates via Let's Encrypt.
+# Replace `your-server.example.com` with your actual domain.
+#
+# Install: https://caddyserver.com/docs/install
+# Run:     sudo caddy run --config /etc/caddy/Caddyfile
+
+your-server.example.com {
+    reverse_proxy localhost:3001
+}
