@@ -1,6 +1,3 @@
-// Copyright (c) 2026 Ubimate. Licensed under the Elastic License 2.0 (ELv2).
-// See LICENSE in the project root for details.
-
 /**
  * Per-user SQLite database factory with in-memory connection cache.
  *

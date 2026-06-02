@@ -1,6 +1,3 @@
-// Copyright (c) 2026 Ubimate. Licensed under the Elastic License 2.0 (ELv2).
-// See LICENSE in the project root for details.
-
 import { Router, Request, Response } from 'express';
 import { randomUUID, createHash } from 'crypto';
 import path from 'path';

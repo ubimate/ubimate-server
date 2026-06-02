@@ -1,6 +1,3 @@
-// Copyright (c) 2026 Ubimate. Licensed under the Elastic License 2.0 (ELv2).
-// See LICENSE in the project root for details.
-
 // ---------------------------------------------------------------------------
 // Shared domain types — used by both apps/api and apps/web.
 // This is the single source of truth for the Ubimate data model.

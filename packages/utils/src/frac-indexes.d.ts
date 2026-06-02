@@ -1,6 +1,3 @@
-// Copyright (c) 2026 Ubimate. Licensed under the Elastic License 2.0 (ELv2).
-// See LICENSE in the project root for details.
-
 declare module 'frac-indexes' {
   /** Generate a single fractional index between two existing indexes. */
   export function generateFractionalIndex(

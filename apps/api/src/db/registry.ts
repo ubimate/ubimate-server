@@ -1,6 +1,3 @@
-// Copyright (c) 2026 Ubimate. Licensed under the Elastic License 2.0 (ELv2).
-// See LICENSE in the project root for details.
-
 /**
  * Registry database — stores user accounts.
  * This is a single shared DB; per-user document data lives in separate files
