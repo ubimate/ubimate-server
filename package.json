@@ -1,0 +1,17 @@
+{
+  "name": "ubimate-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Ubimate self-hostable sync server — Express REST API + Hocuspocus real-time collaboration (Yjs) + SQLite",
+  "scripts": {
+    "dev": "pnpm --filter api dev",
+    "build": "pnpm --filter @ubimate/utils build && pnpm --filter api build",
+    "start": "pnpm --filter api start",
+    "test": "pnpm --filter api test",
+    "docker:up": "docker compose up --build",
+    "docker:down": "docker compose down"
+  },
+  "keywords": ["yjs", "collaboration", "self-hosted", "hocuspocus", "sqlite"],
+  "author": "Ubimate",
+  "license": "AGPL-3.0"
+}

@@ -1,0 +1,43 @@
+services:
+  server:
+    build: .
+    ports:
+      - "${API_PORT:-3001}:3001"
+      - "1234:1234"
+    volumes:
+      - ubimate_data:/app/data
+    environment:
+      NODE_ENV: production
+      DATA_DIR: /app/data
+
+      # --- Required ---
+      JWT_SECRET: ${JWT_SECRET}
+      APP_URL: ${APP_URL}
+      CORS_ORIGIN: ${CORS_ORIGIN}
+
+      # --- Admin account (created on first run) ---
+      ADMIN_USERNAME: ${ADMIN_USERNAME}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      ADMIN_EMAIL: ${ADMIN_EMAIL}
+
+      # --- Optional: email (leave blank to disable) ---
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+
+      # --- Optional: registration control ---
+      REQUIRE_INVITATION: ${REQUIRE_INVITATION:-false}
+      INVITATION_TTL_DAYS: ${INVITATION_TTL_DAYS:-7}
+
+      # --- Optional: upload limits ---
+      MAX_IMAGE_UPLOAD_MB: ${MAX_IMAGE_UPLOAD_MB:-10}
+      MAX_AUDIO_UPLOAD_MB: ${MAX_AUDIO_UPLOAD_MB:-50}
+      MAX_VIDEO_UPLOAD_MB: ${MAX_VIDEO_UPLOAD_MB:-200}
+
+    restart: unless-stopped
+
+volumes:
+  ubimate_data:
