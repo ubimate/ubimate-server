@@ -1,0 +1,12 @@
+.git
+.github
+node_modules
+**/node_modules
+**/dist
+apps/web/dist
+apps/api/dist
+apps/api/data
+data
+test-results
+playwright-report
+**/*.log

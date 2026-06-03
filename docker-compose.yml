@@ -1,47 +1,21 @@
 services:
-  server:
-    build: .
-    ports:
-      - "${API_PORT:-3001}:3001"
-    volumes:
-      - ubimate_data:/app/data
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.unified
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:3001}
+        VITE_HOCUSPOCUS_URL: ${VITE_HOCUSPOCUS_URL:-ws://localhost:3001/yjs}
     environment:
       NODE_ENV: production
-      DATA_DIR: /app/data
-
-      # --- Required ---
-      JWT_SECRET: ${JWT_SECRET}
-      APP_URL: ${APP_URL}
-
-      # --- Admin account (created on first run) ---
-      ADMIN_USERNAME: ${ADMIN_USERNAME}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
-      ADMIN_EMAIL: ${ADMIN_EMAIL}
-
-      # --- Optional: browser CORS (not needed for the Tauri desktop app) ---
-      CORS_ORIGIN: ${CORS_ORIGIN:-}
-
-      # --- Optional: email (leave blank to disable) ---
-      SMTP_HOST: ${SMTP_HOST:-}
-      SMTP_PORT: ${SMTP_PORT:-587}
-      SMTP_SECURE: ${SMTP_SECURE:-false}
-      SMTP_USER: ${SMTP_USER:-}
-      SMTP_PASS: ${SMTP_PASS:-}
-      SMTP_FROM: ${SMTP_FROM:-}
-
-      # --- Optional: registration control ---
-      REQUIRE_INVITATION: ${REQUIRE_INVITATION:-false}
-      INVITATION_TTL_DAYS: ${INVITATION_TTL_DAYS:-7}
-
-      # --- Optional: upload limits ---
-      MAX_IMAGE_UPLOAD_MB: ${MAX_IMAGE_UPLOAD_MB:-10}
-      MAX_AUDIO_UPLOAD_MB: ${MAX_AUDIO_UPLOAD_MB:-50}
-      MAX_VIDEO_UPLOAD_MB: ${MAX_VIDEO_UPLOAD_MB:-200}
-
-      # --- Optional: SQLite tuning ---
-      SQLITE_BUSY_TIMEOUT_MS: ${SQLITE_BUSY_TIMEOUT_MS:-5000}
-
+      API_PORT: 3001
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3001}
+      UPLOAD_MAX_SIZE_MB: ${UPLOAD_MAX_SIZE_MB:-10}
+    volumes:
+      - app-data:/app/apps/api/data
+    ports:
+      - "3001:3001"
     restart: unless-stopped
 
 volumes:
-  ubimate_data:
+  app-data:
