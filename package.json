@@ -11,8 +11,7 @@
     "test": "pnpm --filter api test",
     "start": "pnpm --filter api start",
     "docker-local:up": "docker compose up --build",
-    "docker-local:down": "docker compose down",
-    "caprover:deploy-app": "cp captain-definition-unified /tmp/captain-definition && tar -czf /tmp/ubimate-app.tar.gz -C /tmp captain-definition -C $PWD Dockerfile.unified packages apps/api apps/admin pnpm-lock.yaml pnpm-workspace.yaml package.json && rm /tmp/captain-definition && caprover deploy -a ubimate-app -t /tmp/ubimate-app.tar.gz"
+    "docker-local:down": "docker compose down"
   },
   "keywords": [],
   "author": "",
