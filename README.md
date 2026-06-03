@@ -13,6 +13,7 @@ Self-hostable sync and collaboration server for [Ubimate](https://ubimate.com) �
 - **REST API** (Express) — authentication, workspace management, document metadata, file uploads
 - **Real-time collaboration** (Hocuspocus + Yjs) — conflict-free, multiplayer editing over WebSocket
 - **Persistence** (SQLite via better-sqlite3) — all data stays on your machine; no external database required
+- **Admin panel** — web-based interface for managing users and monitoring disk usage
 
 When self-hosted, Ubimate desktop/web clients connect to your instance instead of the Ubimate cloud.
 
