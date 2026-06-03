@@ -103,7 +103,6 @@ app.get('/uploads/*path', (_req, res) => {
 if (process.env.NODE_ENV === 'production') {
   // Admin SPA — served under /admin (before the main SPA catch-all)
   const ADMIN_ROOT = path.join(__dirname, '../../admin/dist');
-  app.get('/admin', (_req, res) => res.redirect(301, '/admin/'));
   app.use('/admin', express.static(ADMIN_ROOT));
   app.get('/admin/*path', (_req, res) => res.sendFile(path.join(ADMIN_ROOT, 'index.html')));
 
