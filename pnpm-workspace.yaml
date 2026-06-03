@@ -1,5 +1,4 @@
 packages:
-  - "apps/*"
-  - "apps/desktop/e2e"
+  - "apps/api"
+  - "apps/admin"
   - "packages/*"
-  - "sites/*"

@@ -12,7 +12,6 @@ COPY packages/types/package.json packages/types/
 COPY packages/utils/package.json packages/utils/
 COPY packages/crypto/package.json packages/crypto/
 COPY apps/api/package.json apps/api/
-COPY apps/web/package.json apps/web/
 COPY apps/admin/package.json apps/admin/
 
 RUN pnpm install --frozen-lockfile
@@ -20,20 +19,12 @@ RUN pnpm install --frozen-lockfile
 # 2 — source
 COPY packages/ packages/
 COPY apps/api/ apps/api/
-COPY apps/web/ apps/web/
 COPY apps/admin/ apps/admin/
-COPY scripts/ scripts/
 
 # 3 — build shared packages
 RUN pnpm --filter @ubimate/utils build
 
-# 4 — build web (Vite)
-ARG VITE_API_URL=https://app.ubimate.com
-ARG VITE_HOCUSPOCUS_URL=wss://app.ubimate.com/yjs
-RUN pnpm vendor:drawio
-RUN pnpm --filter web build
-
-# 4b — build admin (Vite, served at /admin/)
+# 4 — build admin (Vite, served at /admin/)
 RUN VITE_BASE_PATH=/admin/ pnpm --filter admin build
 
 # 5 — build API (tsc)
@@ -52,7 +43,6 @@ COPY --from=build /app/packages              packages/
 COPY --from=build /app/apps/api/dist         apps/api/dist/
 COPY --from=build /app/apps/api/node_modules apps/api/node_modules/
 COPY --from=build /app/apps/api/package.json apps/api/package.json
-COPY --from=build /app/apps/web/dist         apps/web/dist/
 COPY --from=build /app/apps/admin/dist       apps/admin/dist/
 
 ENV NODE_ENV=production
