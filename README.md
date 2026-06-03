@@ -106,7 +106,7 @@ The admin UI lets you:
 |------|----------|---------|
 | `3001` | HTTP + WebSocket | REST API (`/api/*`), Yjs real-time sync (`/yjs`), and Admin UI (`/admin/`) |
 
-Both the REST API and the Hocuspocus WebSocket endpoint run on the **same port**. Your reverse proxy only needs to proxy one upstream.
+All services run on the **same port**. Your reverse proxy only needs to proxy one upstream.
 
 ---
 
