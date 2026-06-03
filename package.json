@@ -22,7 +22,8 @@
     "caprover:deploy-web": "pnpm run caprover:deploy-com",
     "caprover:deploy-app": "cp captain-definition-unified /tmp/captain-definition && tar -czf /tmp/ubimate-app.tar.gz --exclude node_modules --exclude data --exclude dist --exclude test-results --exclude playwright-report --exclude playwright-report-live --exclude .env --exclude 'apps/web/public/drawio' -C /tmp captain-definition -C $PWD Dockerfile.unified packages apps/api apps/web apps/admin scripts pnpm-lock.yaml pnpm-workspace.yaml package.json && rm /tmp/captain-definition && caprover deploy -a ubimate-app -t /tmp/ubimate-app.tar.gz",
     "caprover:deploy-com": "pnpm --filter com build && cp captain-definition-com /tmp/captain-definition && tar -czf /tmp/ubimate-com.tar.gz -C /tmp captain-definition -C $PWD/sites/com . && rm /tmp/captain-definition && caprover deploy -a ubimate-com -t /tmp/ubimate-com.tar.gz",
-    "vendor:drawio": "node scripts/vendor-drawio.mjs"
+    "vendor:drawio": "node scripts/vendor-drawio.mjs",
+    "sync:ubimate-server": "gh workflow run sync-ubimate-server.yml --ref main"
   },
   "keywords": [],
   "author": "",
