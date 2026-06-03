@@ -81,11 +81,29 @@ All configuration is via environment variables. Copy `.env.example` to `.env` an
 
 ---
 
+## Admin UI
+
+A browser-based admin panel is included and served at **`/admin/`** on the same port as the API (e.g. `http://localhost:3001/admin/`). Log in with the `ADMIN_USERNAME` and `ADMIN_PASSWORD` you configured in `.env`.
+
+The admin UI lets you:
+
+- **View registered users** — email, account status, and per-user disk usage
+- **Delete users** — permanently removes the account and all associated data
+- **Manage invitations** — create invitation links, inspect their status (`pending` / `accepted` / `elapsed`), and revoke them
+
+> The panel is only served in production (`NODE_ENV=production`). For local development, run it separately:
+> ```bash
+> pnpm --filter admin dev
+> ```
+> Open `http://localhost:5173`, then enter your API server URL in the login screen.
+
+---
+
 ## Ports
 
 | Port | Protocol | Purpose |
 |------|----------|---------|
-| `3001` | HTTP + WebSocket | REST API (`/api/*`) and Yjs real-time sync (`/yjs`) |
+| `3001` | HTTP + WebSocket | REST API (`/api/*`), Yjs real-time sync (`/yjs`), and Admin UI (`/admin/`) |
 
 Both the REST API and the Hocuspocus WebSocket endpoint run on the **same port**. Your reverse proxy only needs to proxy one upstream.
 
@@ -190,6 +208,7 @@ apps/
       db/         ← SQLite prepared statements and schema
       middleware/ ← JWT auth, rate limiting
       hocuspocus.ts  ← Yjs WebSocket server
+  admin/          ← Admin UI (React + Vite SPA, served at /admin/)
 packages/
   types/          ← Shared TypeScript types (@ubimate/types)
   utils/          ← Shared utilities (@ubimate/utils)
