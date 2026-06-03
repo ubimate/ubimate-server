@@ -1,7 +1,9 @@
 import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
+import helmet from 'helmet';
 import path from 'path';
+import fs from 'fs';
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import { documentsRouter } from './routes/documents';
@@ -10,6 +12,7 @@ import { authRouter } from './routes/auth';
 import { unfurlRouter } from './routes/unfurl';
 import { adminRouter } from './routes/admin';
 import { workspacesRouter } from './routes/workspaces';
+import { requireAuth } from './middleware/auth';
 import { hocuspocus } from './hocuspocus';
 
 const NO_IMAGE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 150" width="200" height="150">
@@ -33,6 +36,10 @@ const DATA_DIR = process.env.DATA_DIR ?? path.join(__dirname, '../data');
 // ---------------------------------------------------------------------------
 
 const app = express();
+
+// Security headers — CSP is left to the reverse proxy / operator so the
+// pre-built SPAs (which use inline scripts from Vite) are not broken.
+app.use(helmet({ contentSecurityPolicy: false }));
 
 // In production set CORS_ORIGIN to the exact origin (e.g. https://app.ubimate.com)
 // or a comma-separated list (e.g. https://app.ubimate.com,http://localhost:5173).
@@ -87,13 +94,31 @@ app.use('/api/uploads', uploadsRouter);
 app.use('/api/unfurl', unfurlRouter);
 app.use('/api/workspaces', workspacesRouter);
 
-// Serve uploaded files as static assets (supports user subdirectories).
-app.use('/uploads', express.static(path.join(DATA_DIR, 'uploads')));
-
-// Fallback: return a "no image" SVG for any missing upload path.
-app.get('/uploads/*path', (_req, res) => {
-  res.setHeader('Content-Type', 'image/svg+xml');
-  res.send(NO_IMAGE_SVG);
+// Serve uploaded files — authentication required to prevent unauthenticated
+// access to potentially sensitive encrypted attachments.
+// Note: app.use (not app.get) is required here so Express strips the /uploads
+// prefix and req.path is relative to the mount point.
+app.use('/uploads', requireAuth, (req: express.Request, res: express.Response) => {
+  const relPath = req.path.replace(/^\//, ''); // strip leading slash
+  if (!relPath) {
+    res.setHeader('Content-Type', 'image/svg+xml');
+    res.send(NO_IMAGE_SVG);
+    return;
+  }
+  const uploadsRoot = path.resolve(path.join(DATA_DIR, 'uploads'));
+  const target = path.resolve(path.join(DATA_DIR, 'uploads', relPath));
+  // Guard against path traversal attempts.
+  if (!target.startsWith(uploadsRoot + path.sep)) {
+    res.setHeader('Content-Type', 'image/svg+xml');
+    res.send(NO_IMAGE_SVG);
+    return;
+  }
+  res.sendFile(target, (err) => {
+    if (err) {
+      res.setHeader('Content-Type', 'image/svg+xml');
+      res.send(NO_IMAGE_SVG);
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -107,11 +132,13 @@ if (process.env.NODE_ENV === 'production') {
   app.get('/admin/*path', (_req, res) => res.sendFile(path.join(ADMIN_ROOT, 'index.html')));
 
   const SPA_ROOT = path.join(__dirname, '../../web/dist');
-  app.use(express.static(SPA_ROOT));
-  // SPA fallback — any non-API, non-upload path serves index.html
-  app.get('*', (_req, res) => {
-    res.sendFile(path.join(SPA_ROOT, 'index.html'));
-  });
+  if (fs.existsSync(SPA_ROOT)) {
+    app.use(express.static(SPA_ROOT));
+    // SPA fallback — any non-API, non-upload path serves index.html
+    app.get('*', (_req, res) => {
+      res.sendFile(path.join(SPA_ROOT, 'index.html'));
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------

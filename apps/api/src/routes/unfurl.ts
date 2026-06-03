@@ -226,17 +226,44 @@ unfurlRouter.get('/', async (req: Request, res: Response) => {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 
-    const response = await fetch(parsed.href, {
-      signal: controller.signal,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
-        Accept: 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
-      },
-      redirect: 'follow',
-    });
+    const FETCH_HEADERS = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+      Accept: 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.5',
+    };
+
+    // Follow redirects manually so every hop is re-checked for SSRF risk.
+    // Using redirect: 'follow' would bypass the isSsrfRisk check for the
+    // redirect targets (a URL could resolve publicly but redirect to 192.168.x.x).
+    const MAX_HOPS = 5;
+    let currentUrl = parsed.href;
+    let response: globalThis.Response | null = null;
+    for (let hop = 0; hop <= MAX_HOPS; hop++) {
+      const r = await fetch(currentUrl, { signal: controller.signal, headers: FETCH_HEADERS, redirect: 'manual' });
+      if (r.status >= 300 && r.status < 400) {
+        const location = r.headers.get('location');
+        if (!location) break;
+        let next: URL;
+        try { next = new URL(location, currentUrl); } catch { break; }
+        if (next.protocol !== 'http:' && next.protocol !== 'https:') break;
+        if (await isSsrfRisk(next.hostname)) {
+          clearTimeout(timeout);
+          res.status(400).json({ error: 'URL not allowed' });
+          return;
+        }
+        currentUrl = next.href;
+        continue;
+      }
+      response = r;
+      break;
+    }
 
     clearTimeout(timeout);
+
+    if (!response) {
+      res.status(502).json({ error: 'Failed to fetch URL' });
+      return;
+    }
 
     const contentType = response.headers.get('content-type') ?? '';
     if (!contentType.includes('text/html') && !contentType.includes('application/xhtml')) {
@@ -273,7 +300,7 @@ unfurlRouter.get('/', async (req: Request, res: Response) => {
     }
     const html = new TextDecoder('utf-8', { fatal: false }).decode(merged);
 
-    const og = parseOgData(html, response.url || raw);
+    const og = parseOgData(html, currentUrl);
     res.json({ ...og, url: raw });
   } catch (err: unknown) {
     if ((err as { name?: string }).name === 'AbortError') {
