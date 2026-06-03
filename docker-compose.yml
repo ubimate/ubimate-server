@@ -6,11 +6,11 @@ services:
       args:
         VITE_API_URL: ${VITE_API_URL:-http://localhost:3001}
         VITE_HOCUSPOCUS_URL: ${VITE_HOCUSPOCUS_URL:-ws://localhost:3001/yjs}
+    env_file:
+      - path: .env
+        required: false
     environment:
       NODE_ENV: production
-      API_PORT: 3001
-      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3001}
-      UPLOAD_MAX_SIZE_MB: ${UPLOAD_MAX_SIZE_MB:-10}
     volumes:
       - app-data:/app/apps/api/data
     ports:
