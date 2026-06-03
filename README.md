@@ -15,7 +15,7 @@ Self-hostable sync and collaboration server for [Ubimate](https://ubimate.com) �
 - **Persistence** (SQLite via better-sqlite3) — all data stays on your machine; no external database required
 - **Admin panel** — web-based interface for managing users and monitoring disk usage
 
-When self-hosted, Ubimate desktop/web clients connect to your instance instead of the Ubimate cloud.
+When self-hosted, Ubimate clients connect to your instance instead of the Ubimate cloud.
 
 For a detailed explanation of the end-to-end encryption model and the Yjs-based sync protocol, see the [Ubimate technical whitepaper](https://ubimate.com/whitepaper.html).
 
@@ -62,7 +62,6 @@ All configuration is via environment variables. Copy `.env.example` to `.env` an
 |----------|----------|-------------|
 | `JWT_SECRET` | Yes | Long random string used to sign auth tokens |
 | `APP_URL` | Yes | Public URL of this server (used in emails) |
-| `CORS_ORIGIN` | No | Browser origin(s) to allow via CORS. Not needed for self-hosting |
 | `ADMIN_USERNAME` | Yes | Admin account created on first run |
 | `ADMIN_PASSWORD` | Yes | Admin account password |
 | `ADMIN_EMAIL` | Yes | Admin account email |
@@ -138,16 +137,6 @@ sudo nginx -t && sudo systemctl reload nginx
 ```
 
 See [`deploy/nginx.conf`](./deploy/nginx.conf) for the annotated example.
-
-### CORS_ORIGIN
-
-The Tauri desktop app origins (`tauri://localhost`, `https://tauri.localhost`) are **always allowed** regardless of `CORS_ORIGIN`. You only need to set it if you are also serving the Ubimate web app from a browser origin:
-
-```
-CORS_ORIGIN=https://app.your-client.example.com
-```
-
-Leave it unset for a desktop-only self-hosted setup.
 
 ---
 
