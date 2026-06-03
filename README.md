@@ -206,6 +206,14 @@ packages/
 
 ---
 
+## Transparency & contributing
+
+`ubimate-server` is the self-hostable backend for [Ubimate](https://ubimate.com). We publish it as open source so that anyone deploying it can inspect exactly what they're running. This repository is a mirror of our internal production codebase — what you see here is what runs on Ubimate servers.
+
+Because changes flow from the internal codebase outward, **we do not accept pull requests**. Bug reports and feature requests are welcome — please [open an issue](https://github.com/ubimate/ubimate-server/issues).
+
+---
+
 ## License
 
 [Elastic License 2.0 (ELv2)](./LICENSE) — © Ubimate
