@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import jwt from 'jsonwebtoken';
 import rateLimit from 'express-rate-limit';
+import { trackEvent } from '../analytics';
 // altcha-lib v1: use require() because moduleResolution:node can't resolve
 // types via package exports conditions, and the deep path isn't in the
 // exports map so Node rejects it at runtime. The './v1' subpath is exported
@@ -23,7 +24,7 @@ const { createChallenge, verifySolution } = require('altcha-lib/v1') as {
   createChallenge(opts: { algorithm?: string; hmacKey: string; maxNumber?: number; expires?: Date }): Promise<{ algorithm: string; challenge: string; maxnumber: number; salt: string; signature: string }>;
   verifySolution(payload: string, hmacKey: string, checkExpires?: boolean): Promise<boolean>;
 };
-import { registryStmts } from '../db/registry';
+import { registryStmts, getUserType } from '../db/registry';
 import type { UserRow } from '../db/registry';
 import { getUserDb } from '../db/userDb';
 import { JWT_SECRET } from '../middleware/auth';
@@ -145,6 +146,7 @@ demoRouter.post('/provision', demoLimiter, async (req: Request, res: Response) =
     created_at: now,
     demo_expires_at: expiresAt,
   });
+  trackEvent('user-created', { type: 'demo' });
 
   const userDb = getUserDb(userId);
   seedDemoWorkspace(userDb, workspaceId);
@@ -267,6 +269,7 @@ demoRouter.post('/freetrial', requireAuth, (req: Request, res: Response) => {
   const token      = row.freetrial_token ?? randomBytes(32).toString('hex');
 
   registryStmts.setFreeTrialToken.run({ token, expires_at: expiresAt, id: req.userId });
+  trackEvent('user-type-changed', { from: getUserType(row), to: 'trial' });
 
   res.json({ freetrial_token: token, freetrial_expires_at: expiresAt });
 });
@@ -302,6 +305,7 @@ demoRouter.get('/freetrial/:token', demoLimiter, (req: Request, res: Response) =
   );
 
   res.cookie(SESSION_COOKIE, jwtToken, COOKIE_BASE);
+  trackEvent('user-trial-redeemed');
 
   res.json({
     user: {

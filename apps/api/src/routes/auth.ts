@@ -8,6 +8,7 @@ import type { UserRow, InvitationRow, WorkspaceKeyRow } from '../db/registry';
 import { JWT_SECRET, JWT_EXPIRES_IN, requireAuth } from '../middleware/auth';
 import { getUserDb } from '../db/userDb';
 import type { AuthPayload } from '@ubimate/types';
+import { trackEvent } from '../analytics';
 
 export const authRouter = Router();
 
@@ -189,7 +190,9 @@ authRouter.post('/register', authLimiter, async (req: Request, res: Response) =>
     status: 'active',
     public_key: publicKey,
     wrapped_content_key: null,
+    user_type: 'regular',
   });
+  trackEvent('user-created', { type: 'regular' });
 
   // Create the initial workspace document in the user's per-user DB.
   const userDb = getUserDb(userId);

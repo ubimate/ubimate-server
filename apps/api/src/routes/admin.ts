@@ -6,6 +6,7 @@ import path from 'path';
 import fs from 'fs';
 import { ed25519 } from '@noble/curves/ed25519.js';
 import { JWT_SECRET } from '../middleware/auth';
+import { trackEvent } from '../analytics';
 import {
   requireAdminConfigured,
   requireAdmin,
@@ -13,7 +14,7 @@ import {
   getAdminIdentity,
   ADMIN_TOKEN_EXPIRES_IN,
 } from '../middleware/adminAuth';
-import { registryStmts } from '../db/registry';
+import { registryStmts, getUserType } from '../db/registry';
 import type { InvitationRow } from '../db/registry';
 import { sendInvitationEmail, smtpConfigured } from '../email';
 
@@ -108,6 +109,7 @@ adminRouter.get('/users', (_req: Request, res: Response) => {
     is_demo: number;
     demo_expires_at: number | null;
     freetrial_token: string | null;
+    user_type: string;
   }[];
 
   const users = rows.map((row) => {
@@ -154,6 +156,7 @@ adminRouter.get('/users', (_req: Request, res: Response) => {
       is_demo: row.is_demo === 1,
       demo_expires_at: row.demo_expires_at,
       has_freetrial: row.freetrial_token !== null,
+      user_type: row.user_type,
     };
   });
 
@@ -181,6 +184,7 @@ adminRouter.delete('/users/:id', (req: Request, res: Response) => {
   fs.writeFileSync(tombstonePath, JSON.stringify(tombstone, null, 2));
 
   registryStmts.deleteUser.run(id);
+  trackEvent('user-deleted', { type: getUserType(row as any) });
 
   res.status(204).send();
 });

@@ -32,6 +32,7 @@ interface AdminUser {
   is_demo: boolean;
   demo_expires_at: number | null;
   has_freetrial: boolean;
+  user_type: string;
 }
 
 type UserTypeFilter = 'all' | 'real' | 'demo' | 'freetrial';
@@ -330,8 +331,8 @@ const AdminDashboard: React.FC<{ api: ReturnType<typeof useAdminApi>; onLogout: 
 
   const filteredUsers = users.filter((u) => {
     if (userTypeFilter === 'real')      return !u.is_demo;
-    if (userTypeFilter === 'demo')      return u.is_demo;
-    if (userTypeFilter === 'freetrial') return u.is_demo && u.has_freetrial;
+    if (userTypeFilter === 'demo')      return u.user_type === 'demo';
+    if (userTypeFilter === 'freetrial') return u.user_type === 'trial';
     return true;
   });
 
@@ -351,9 +352,13 @@ const AdminDashboard: React.FC<{ api: ReturnType<typeof useAdminApi>; onLogout: 
       title: 'Type',
       key: 'type',
       render: (_: unknown, record: AdminUser) => {
-        if (!record.is_demo) return null;
-        if (record.has_freetrial) return <Tag color="purple">free trial</Tag>;
-        return <Tag color="orange">demo</Tag>;
+        const TYPE_COLORS: Record<string, string> = {
+          regular: 'green',
+          demo: 'orange',
+          trial: 'purple',
+        };
+        const color = TYPE_COLORS[record.user_type] ?? 'blue';
+        return <Tag color={color}>{record.user_type}</Tag>;
       },
     },
     {
