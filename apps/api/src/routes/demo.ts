@@ -36,7 +36,7 @@ import { seedDemoWorkspace } from '../db/demoSeeder';
 
 const DEMO_MODE_ENABLED        = process.env.DEMO_MODE_ENABLED !== 'false';
 const DEMO_EXPIRY_HOURS        = Number(process.env.DEMO_EXPIRY_HOURS)        || 24;
-const DEMO_RATE_LIMIT_PER_HOUR = Number(process.env.DEMO_RATE_LIMIT_PER_HOUR) || 5;
+const DEMO_RATE_LIMIT_PER_HOUR = Number(process.env.DEMO_RATE_LIMIT_PER_HOUR) || 20;
 // Use parseInt so that 0 is a valid (no-headroom) cap value.
 const MAX_DEMO_USERS           = process.env.MAX_DEMO_USERS !== undefined
   ? parseInt(process.env.MAX_DEMO_USERS, 10)
