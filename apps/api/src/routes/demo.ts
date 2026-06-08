@@ -206,6 +206,8 @@ demoRouter.post('/end-session', requireAuth, (req: Request, res: Response) => {
   registryStmts.deleteUser.run(req.userId);
   const dbPath = path.join(DATA_DIR, 'users', `${req.userId}.db`);
   try { fs.unlinkSync(dbPath); } catch { /* already removed */ }
+  try { fs.unlinkSync(`${dbPath}-shm`); } catch { /* ignore */ }
+  try { fs.unlinkSync(`${dbPath}-wal`); } catch { /* ignore */ }
   const uploadsDir = path.join(DATA_DIR, 'uploads', req.userId);
   try { fs.rmSync(uploadsDir, { recursive: true, force: true }); } catch { /* ignore */ }
 
@@ -224,6 +226,8 @@ export function runDemoCleanup(): void {
     registryStmts.deleteUser.run(id);
     const dbPath = path.join(DATA_DIR, 'users', `${id}.db`);
     try { fs.unlinkSync(dbPath); } catch { /* already removed */ }
+    try { fs.unlinkSync(`${dbPath}-shm`); } catch { /* ignore */ }
+    try { fs.unlinkSync(`${dbPath}-wal`); } catch { /* ignore */ }
     const uploadsDir = path.join(DATA_DIR, 'uploads', id);
     try { fs.rmSync(uploadsDir, { recursive: true, force: true }); } catch { /* ignore */ }
   }
