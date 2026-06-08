@@ -24,6 +24,8 @@ declare global {
       userId: string;
       userEmail: string;
       userDbHandle: UserDbHandle;
+      /** True when the session belongs to an ephemeral demo account. */
+      isDemo: boolean;
     }
   }
 }
@@ -56,9 +58,10 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
     return;
   }
   try {
-    const payload = jwt.verify(token, JWT_SECRET) as { sub: string; email: string };
+    const payload = jwt.verify(token, JWT_SECRET) as { sub: string; email: string; is_demo?: boolean };
     req.userId = payload.sub;
     req.userEmail = payload.email;
+    req.isDemo = payload.is_demo === true;
     req.userDbHandle = getUserDb(payload.sub);
     next();
   } catch {

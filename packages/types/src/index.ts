@@ -265,3 +265,30 @@ export interface AuthResponse {
    */
   workspace_keys: WorkspaceKey[];
 }
+
+/**
+ * Response of POST /api/demo/provision.
+ * The server creates a throwaway account and workspace, issues a session-scoped
+ * JWT cookie, and returns this shape. No ZK keypair or workspace key is
+ * involved — the demo workspace is unencrypted by design.
+ */
+export interface DemoProvisionResponse {
+  user: User;
+  /** Always empty — demo workspaces are unencrypted. */
+  workspace_keys: WorkspaceKey[];
+  is_demo: true;
+  /** Unix ms timestamp when this demo account will be automatically deleted. */
+  demo_expires_at: number;
+}
+
+/**
+ * Response of POST /api/demo/freetrial.
+ * Returns the re-entry token (not the full URL — the client constructs the URL
+ * from window.location.origin so it works across all deployment environments).
+ */
+export interface FreeTrialResponse {
+  /** 64-char hex token used to re-enter the free-trial session via GET /api/demo/freetrial/:token. */
+  freetrial_token: string;
+  /** Unix ms timestamp when the free-trial (and underlying demo account) expires. */
+  freetrial_expires_at: number;
+}

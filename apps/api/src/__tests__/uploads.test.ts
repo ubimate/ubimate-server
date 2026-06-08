@@ -155,6 +155,69 @@ describe('uploads router', () => {
   });
 });
 
+// ── Demo upload block ──────────────────────────────────────────────────────────
+
+describe('uploads router — demo mode block', () => {
+  let tmpDir: string;
+  let server: ReturnType<typeof express.application.listen> | null = null;
+  let baseUrl = '';
+
+  beforeEach(async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ubimate-uploads-demo-test-'));
+    process.env.DATA_DIR = tmpDir;
+    process.env.NODE_ENV = 'test';
+
+    vi.resetModules();
+
+    vi.doMock('../middleware/auth', () => ({
+      requireAuth: (req: Request, _res: Response, next: NextFunction) => {
+        (req as Request & { userId: string }).userId = TEST_USER_ID;
+        (req as Request & { userDbHandle: UserDbHandle }).userDbHandle = {} as UserDbHandle;
+        // Mark as demo session
+        (req as Request & { isDemo: boolean }).isDemo = true;
+        next();
+      },
+    }));
+
+    const { uploadsRouter } = await import('../routes/uploads');
+    const app = express();
+    app.use('/api/uploads', uploadsRouter);
+
+    server = app.listen(0);
+    await new Promise<void>((resolve) => server?.once('listening', resolve));
+    const addr = server.address() as AddressInfo;
+    baseUrl = `http://127.0.0.1:${addr.port}`;
+  });
+
+  afterEach(async () => {
+    if (server) {
+      await new Promise<void>((resolve) => server?.close(() => resolve()));
+      server = null;
+    }
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    delete process.env.DATA_DIR;
+    delete process.env.NODE_ENV;
+    vi.resetModules();
+  });
+
+  it('blocks file uploads for demo users with 403', async () => {
+    const form = buildFormData('photo.jpg', 'image/jpeg', 512);
+    const res = await fetch(`${baseUrl}/api/uploads`, { method: 'POST', body: form });
+    expect(res.status).toBe(403);
+    const body = await res.json() as { error: string };
+    expect(body.error).toMatch(/demo/i);
+  });
+
+  it('does not write any file to disk when demo upload is blocked', async () => {
+    const form = buildFormData('photo.jpg', 'image/jpeg', 512);
+    await fetch(`${baseUrl}/api/uploads`, { method: 'POST', body: form });
+    const uploadsDir = path.join(tmpDir, 'uploads', TEST_USER_ID);
+    if (fs.existsSync(uploadsDir)) {
+      expect(fs.readdirSync(uploadsDir)).toHaveLength(0);
+    }
+  });
+});
+
 // ── GET /uploads/* — authenticated file serving ──────────────────────────────
 
 const NO_IMAGE_SVG_SNIP = '<svg xmlns';

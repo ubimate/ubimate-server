@@ -12,6 +12,7 @@ import { authRouter } from './routes/auth';
 import { unfurlRouter } from './routes/unfurl';
 import { adminRouter } from './routes/admin';
 import { workspacesRouter } from './routes/workspaces';
+import { demoRouter, scheduleDemoCleanup } from './routes/demo';
 import { requireAuth } from './middleware/auth';
 import { hocuspocus } from './hocuspocus';
 
@@ -89,6 +90,7 @@ app.get('/api/health', (_req, res) => {
 
 app.use('/api/auth', authRouter);
 app.use('/api/admin', adminRouter);
+app.use('/api/demo', demoRouter);
 app.use('/api/documents', documentsRouter);
 app.use('/api/uploads', uploadsRouter);
 app.use('/api/unfurl', unfurlRouter);
@@ -187,4 +189,5 @@ server.on('upgrade', (request, socket, head) => {
 server.listen(API_PORT, () => {
   console.log(`[app]   listening on http://localhost:${API_PORT}`);
   console.log(`[app]   REST API at /api, WebSocket at /yjs`);
+  scheduleDemoCleanup();
 });

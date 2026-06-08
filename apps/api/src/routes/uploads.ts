@@ -28,6 +28,11 @@ uploadsRouter.use(requireAuth);
  * Accepts all MIME types (images and arbitrary file attachments).
  */
 uploadsRouter.post('/', (req: Request, res: Response) => {
+  if (req.isDemo) {
+    res.status(403).json({ error: 'File uploads are not available in demo mode' });
+    return;
+  }
+
   // Lazily create the user's upload directory on first upload.
   const userUploadsDir = path.join(DATA_DIR, 'uploads', req.userId);
   fs.mkdirSync(userUploadsDir, { recursive: true });

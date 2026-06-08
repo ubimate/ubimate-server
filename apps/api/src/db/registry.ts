@@ -99,6 +99,12 @@ export interface UserRow {
   public_key: string | null;
   /** Base64-encoded sealed content key — null for pre-ZK accounts. */
   wrapped_content_key: string | null;
+  /** 1 when this is a throwaway demo account, 0 otherwise. */
+  is_demo: number;
+  /** Unix ms expiry for demo accounts; null for real accounts. */
+  demo_expires_at: number | null;
+  /** Random 64-char hex token used to re-enter a free-trial demo session. Null until activated. */
+  freetrial_token: string | null;
 }
 
 /** Safely parse the properties JSON column. Returns an empty object on malformed data. */
@@ -162,6 +168,21 @@ registryDb.exec(`
   CREATE INDEX IF NOT EXISTS idx_reset_tokens_user_id ON credential_reset_tokens(user_id);
 `);
 
+// Migrations — add demo columns if they do not already exist.
+{
+  const userCols = (registryDb.pragma('table_info(users)') as { name: string }[]).map((c) => c.name);
+  if (!userCols.includes('is_demo')) {
+    registryDb.exec(`ALTER TABLE users ADD COLUMN is_demo INTEGER NOT NULL DEFAULT 0`);
+  }
+  if (!userCols.includes('demo_expires_at')) {
+    registryDb.exec(`ALTER TABLE users ADD COLUMN demo_expires_at INTEGER`);
+  }
+  if (!userCols.includes('freetrial_token')) {
+    registryDb.exec(`ALTER TABLE users ADD COLUMN freetrial_token TEXT`);
+    registryDb.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_freetrial_token ON users(freetrial_token) WHERE freetrial_token IS NOT NULL`);
+  }
+}
+
 // Migrations — add ZK #5 columns if they do not already exist.
 {
   const cols = (registryDb.pragma('table_info(invitations)') as { name: string }[]).map((c) => c.name);
@@ -192,6 +213,23 @@ export const registryStmts = {
     INSERT INTO users (id, email, properties, created_at, status, public_key, wrapped_content_key)
     VALUES (@id, @email, @properties, @created_at, @status, @public_key, @wrapped_content_key)
   `),
+  createDemoUser: registryDb.prepare(`
+    INSERT INTO users (id, email, properties, created_at, status, is_demo, demo_expires_at)
+    VALUES (@id, @email, @properties, @created_at, 'active', 1, @demo_expires_at)
+  `),
+  countDemoUsers: registryDb.prepare(`SELECT COUNT(*) as count FROM users WHERE is_demo = 1`),
+  listExpiredDemoUsers: registryDb.prepare(`
+    SELECT id FROM users WHERE is_demo = 1 AND demo_expires_at < ?
+  `),
+  setFreeTrialToken: registryDb.prepare(`
+    UPDATE users SET freetrial_token = @token, demo_expires_at = @expires_at WHERE id = @id
+  `),
+  getUserByFreeTrialToken: registryDb.prepare(`
+    SELECT * FROM users WHERE freetrial_token = ?
+  `),
+  deleteAllWorkspaceKeysForUser: registryDb.prepare(`
+    DELETE FROM workspace_keys WHERE user_id = ?
+  `),
   getUserByEmail: registryDb.prepare(`SELECT * FROM users WHERE email = ?`),
   getUserById: registryDb.prepare(`SELECT * FROM users WHERE id = ?`),
   updateUserCryptoKeys: registryDb.prepare(`
@@ -205,7 +243,7 @@ export const registryStmts = {
     WHERE id = @id
   `),
   deleteUser: registryDb.prepare(`DELETE FROM users WHERE id = ?`),
-  listUsers: registryDb.prepare(`SELECT id, email, properties, status, created_at FROM users`),
+  listUsers: registryDb.prepare(`SELECT id, email, properties, status, created_at, is_demo, demo_expires_at, freetrial_token FROM users`),
 
   // Workspace keys
   insertWorkspaceKey: registryDb.prepare(`

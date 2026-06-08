@@ -5,6 +5,7 @@ import {
   Form,
   Input,
   Modal,
+  Radio,
   Space,
   Table,
   Tag,
@@ -28,7 +29,12 @@ interface AdminUser {
   status: string;
   created_at: number;
   disk_usage_bytes: number;
+  is_demo: boolean;
+  demo_expires_at: number | null;
+  has_freetrial: boolean;
 }
+
+type UserTypeFilter = 'all' | 'real' | 'demo' | 'freetrial';
 
 interface AdminInvitation {
   id: string;
@@ -242,6 +248,7 @@ const AdminDashboard: React.FC<{ api: ReturnType<typeof useAdminApi>; onLogout: 
   const [invitations, setInvitations] = useState<AdminInvitation[]>([]);
   const [loadingUsers, setLoadingUsers] = useState(true);
   const [loadingInvitations, setLoadingInvitations] = useState(true);
+  const [userTypeFilter, setUserTypeFilter] = useState<UserTypeFilter>('all');
   const [inviteModalOpen, setInviteModalOpen] = useState(false);
   const [inviteLoading, setInviteLoading] = useState(false);
   const [inviteForm] = Form.useForm();
@@ -321,6 +328,13 @@ const AdminDashboard: React.FC<{ api: ReturnType<typeof useAdminApi>; onLogout: 
     });
   }
 
+  const filteredUsers = users.filter((u) => {
+    if (userTypeFilter === 'real')      return !u.is_demo;
+    if (userTypeFilter === 'demo')      return u.is_demo;
+    if (userTypeFilter === 'freetrial') return u.is_demo && u.has_freetrial;
+    return true;
+  });
+
   const userColumns = [
     {
       title: 'Email',
@@ -334,10 +348,27 @@ const AdminDashboard: React.FC<{ api: ReturnType<typeof useAdminApi>; onLogout: 
         (record.properties as { name?: string }).name ?? '—',
     },
     {
+      title: 'Type',
+      key: 'type',
+      render: (_: unknown, record: AdminUser) => {
+        if (!record.is_demo) return null;
+        if (record.has_freetrial) return <Tag color="purple">free trial</Tag>;
+        return <Tag color="orange">demo</Tag>;
+      },
+    },
+    {
       title: 'Status',
       dataIndex: 'status',
       key: 'status',
       render: (status: string) => <Tag color={STATUS_COLORS[status] ?? 'default'}>{status}</Tag>,
+    },
+    {
+      title: 'Expires',
+      key: 'demo_expires_at',
+      render: (_: unknown, record: AdminUser) =>
+        record.demo_expires_at ? formatDate(record.demo_expires_at) : '—',
+      sorter: (a: AdminUser, b: AdminUser) =>
+        (a.demo_expires_at ?? 0) - (b.demo_expires_at ?? 0),
     },
     {
       title: 'Disk usage',
@@ -430,9 +461,24 @@ const AdminDashboard: React.FC<{ api: ReturnType<typeof useAdminApi>; onLogout: 
         <Button onClick={onLogout}>Sign out</Button>
       </div>
 
-      <Card title="Users" className="admin-section">
+      <Card
+        title="Users"
+        className="admin-section"
+        extra={
+          <Radio.Group
+            value={userTypeFilter}
+            onChange={(e) => setUserTypeFilter(e.target.value as UserTypeFilter)}
+            size="small"
+          >
+            <Radio.Button value="all">All ({users.length})</Radio.Button>
+            <Radio.Button value="real">Real ({users.filter(u => !u.is_demo).length})</Radio.Button>
+            <Radio.Button value="demo">Demo ({users.filter(u => u.is_demo).length})</Radio.Button>
+            <Radio.Button value="freetrial">Free trial ({users.filter(u => u.is_demo && u.has_freetrial).length})</Radio.Button>
+          </Radio.Group>
+        }
+      >
         <Table
-          dataSource={users}
+          dataSource={filteredUsers}
           columns={userColumns}
           rowKey="id"
           loading={loadingUsers}
