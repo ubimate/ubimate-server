@@ -107,6 +107,8 @@ export interface UserRow {
   freetrial_token: string | null;
   /** Canonical account type — e.g. 'regular', 'demo', 'trial', 'perso26', 'perso26_launch'. */
   user_type: string;
+  /** Mutable contact address for billing and notifications. NULL means use `email`. Has no cryptographic role. */
+  contact_email: string | null;
 }
 
 /**
@@ -198,6 +200,14 @@ registryDb.exec(`
     registryDb.exec(`UPDATE users SET user_type = 'trial' WHERE is_demo = 1 AND freetrial_token IS NOT NULL`);
     registryDb.exec(`UPDATE users SET user_type = 'demo'  WHERE is_demo = 1 AND freetrial_token IS NULL`);
     registryDb.exec(`CREATE INDEX IF NOT EXISTS idx_users_user_type ON users(user_type)`);
+  }
+}
+
+// Migration — add contact_email column if it does not already exist.
+{
+  const userCols = (registryDb.pragma('table_info(users)') as { name: string }[]).map((c) => c.name);
+  if (!userCols.includes('contact_email')) {
+    registryDb.exec(`ALTER TABLE users ADD COLUMN contact_email TEXT`);
   }
 }
 
