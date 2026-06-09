@@ -55,6 +55,7 @@ describe('workspaces router', () => {
         status: 'active',
         public_key: null,
         wrapped_content_key: null,
+        user_type: 'free',
       });
     }
 

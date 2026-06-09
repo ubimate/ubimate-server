@@ -42,6 +42,29 @@ const app = express();
 // pre-built SPAs (which use inline scripts from Vite) are not broken.
 app.use(helmet({ contentSecurityPolicy: false }));
 
+// Cross-origin isolation — places the web app in a dedicated OS process,
+// preventing Spectre-class cross-origin reads of the JS heap (where the
+// Ed25519 private key and derived seed live for the session).
+//
+// COOP: prevents cross-origin windows from retaining a reference to this
+//       browsing context, blocking window.opener-based attacks.
+// COEP: requires all loaded sub-resources to either be same-origin or
+//       explicitly opt-in via Cross-Origin-Resource-Policy / CORS.
+//       This is safe because the SPA loads no external CDN resources —
+//       all scripts, styles, and fonts are bundled and self-hosted.
+//
+// Tauri webview requests carry no Origin header; the guard skips them so
+// desktop clients are unaffected.
+app.use((_req, res, next) => {
+  const origin = _req.headers.origin ?? '';
+  const isTauri = origin === 'tauri://localhost' || origin === 'https://tauri.localhost';
+  if (!isTauri) {
+    res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+    res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
+  }
+  next();
+});
+
 // In production set CORS_ORIGIN to the exact origin (e.g. https://app.ubimate.com)
 // or a comma-separated list (e.g. https://app.ubimate.com,http://localhost:5173).
 // Tauri desktop origins (https://tauri.localhost, tauri://localhost) are always allowed.

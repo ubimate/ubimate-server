@@ -179,6 +179,7 @@ describe('admin router', () => {
       status: 'active',
       public_key: null,
       wrapped_content_key: null,
+      user_type: 'free',
     });
 
     const res = await fetch(`${baseUrl}/api/admin/users`, {
@@ -214,6 +215,7 @@ describe('admin router', () => {
       status: 'active',
       public_key: null,
       wrapped_content_key: null,
+      user_type: 'free',
     });
 
     const res = await fetch(`${baseUrl}/api/admin/users/${userId}`, {
@@ -241,6 +243,7 @@ describe('admin router', () => {
       status: 'active',
       public_key: null,
       wrapped_content_key: null,
+      user_type: 'free',
     });
 
     await fetch(`${baseUrl}/api/admin/users/${userId}`, {
