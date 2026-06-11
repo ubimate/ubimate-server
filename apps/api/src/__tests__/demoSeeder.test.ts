@@ -26,18 +26,23 @@ import { seedDemoWorkspace } from '../db/demoSeeder';
 describe('seedDemoWorkspace', () => {
   let tmpDir: string;
   let dbPath: string;
+  let db: ReturnType<typeof initUserDb> | null;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ubimate-seeder-test-'));
     dbPath = path.join(tmpDir, 'demo.db');
+    db = null;
   });
 
   afterEach(() => {
+    db?.db.close();
+    db = null;
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
   function openDb() {
-    return initUserDb(dbPath);
+    db = initUserDb(dbPath);
+    return db;
   }
 
   it('inserts exactly 9 documents', () => {

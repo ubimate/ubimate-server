@@ -64,6 +64,8 @@ describe('PUT /api/documents/:id — old src file cleanup', () => {
       await new Promise<void>((resolve) => server?.close(() => resolve()));
       server = null;
     }
+    const { closeRegistryDb } = await import('../db/registry');
+    closeRegistryDb();
     handle.db.close();
     fs.rmSync(tmpDir, { recursive: true, force: true });
     delete process.env.DATA_DIR;

@@ -6,6 +6,7 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
+import { closeAllUserDbs } from './userDb';
 
 const DATA_DIR = process.env.DATA_DIR ?? path.join(__dirname, '../../data');
 const SQLITE_BUSY_TIMEOUT_MS = Number(process.env.SQLITE_BUSY_TIMEOUT_MS ?? 5000);
@@ -342,5 +343,6 @@ export function withRegistryTransaction<T>(fn: () => T): T {
 
 /** Close the shared registry DB. Intended for tests that load the module in isolation. */
 export function closeRegistryDb(): void {
+  closeAllUserDbs();
   registryDb.close();
 }

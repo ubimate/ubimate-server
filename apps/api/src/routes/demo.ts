@@ -26,7 +26,7 @@ const { createChallenge, verifySolution } = require('altcha-lib/v1') as {
 };
 import { registryStmts, getUserType } from '../db/registry';
 import type { UserRow } from '../db/registry';
-import { getUserDb } from '../db/userDb';
+import { closeUserDb, getUserDb } from '../db/userDb';
 import { JWT_SECRET } from '../middleware/auth';
 import { requireAuth } from '../middleware/auth';
 import { seedDemoWorkspace } from '../db/demoSeeder';
@@ -206,6 +206,7 @@ demoRouter.post('/end-session', requireAuth, (req: Request, res: Response) => {
   // Immediate purge — same logic as the hourly cleanup.
   registryStmts.deleteAllWorkspaceKeysForUser.run(req.userId);
   registryStmts.deleteUser.run(req.userId);
+  closeUserDb(req.userId);
   const dbPath = path.join(DATA_DIR, 'users', `${req.userId}.db`);
   try { fs.unlinkSync(dbPath); } catch { /* already removed */ }
   try { fs.unlinkSync(`${dbPath}-shm`); } catch { /* ignore */ }
@@ -226,6 +227,7 @@ export function runDemoCleanup(): void {
   for (const { id } of expired) {
     registryStmts.deleteAllWorkspaceKeysForUser.run(id);
     registryStmts.deleteUser.run(id);
+    closeUserDb(id);
     const dbPath = path.join(DATA_DIR, 'users', `${id}.db`);
     try { fs.unlinkSync(dbPath); } catch { /* already removed */ }
     try { fs.unlinkSync(`${dbPath}-shm`); } catch { /* ignore */ }

@@ -32,4 +32,19 @@ export function getUserDb(userId: string): UserDbHandle {
   return handle;
 }
 
+export function closeUserDb(userId: string): void {
+  const handle = cache.get(userId);
+  if (!handle) return;
+
+  handle.db.close();
+  cache.delete(userId);
+}
+
+export function closeAllUserDbs(): void {
+  for (const [userId, handle] of cache) {
+    handle.db.close();
+    cache.delete(userId);
+  }
+}
+
 export type { UserDbHandle };
