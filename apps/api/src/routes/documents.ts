@@ -18,11 +18,19 @@ import { requireAuth } from '../middleware/auth';
 import { registryStmts } from '../db/registry';
 
 const DATA_DIR = process.env.DATA_DIR ?? path.join(__dirname, '../../data');
+const MAX_NOTE_CHARS = 4_000;
 
 export const documentsRouter = Router();
 
 // All document routes require authentication.
 documentsRouter.use(requireAuth);
+
+function getNoteTitleLength(properties: unknown): number {
+  if (!properties || typeof properties !== 'object') return 0;
+  const title = (properties as Record<string, unknown>).title;
+  if (typeof title !== 'string') return 0;
+  return title.length;
+}
 
 // ---------------------------------------------------------------------------
 // SSE — tree-change notifications (scoped per user)
@@ -155,6 +163,10 @@ documentsRouter.post('/', (req: Request, res: Response) => {
 
   if (!type || !['page', 'db-page', 'folder', 'db-folder', 'workspace', 'image', 'file', 'note', 'block-registry'].includes(type)) {
     return res.status(400).json({ error: 'Invalid or missing `type`' });
+  }
+
+  if (type === 'note' && getNoteTitleLength(properties) > MAX_NOTE_CHARS) {
+    return res.status(400).json({ error: `Note is too long (max ${MAX_NOTE_CHARS} characters)` });
   }
 
   const now = Date.now();
@@ -377,6 +389,9 @@ documentsRouter.post('/sync/structural', (req: Request, res: Response) => {
 
         const payload = op.payload as CreateDocumentPayload & { status?: number; status_timestamp?: number | null };
         if (!payload.type || !['page', 'db-page', 'folder', 'db-folder', 'workspace', 'image', 'file', 'note', 'block-registry'].includes(payload.type)) {
+          skipped++; continue;
+        }
+        if (payload.type === 'note' && getNoteTitleLength(payload.properties ?? {}) > MAX_NOTE_CHARS) {
           skipped++; continue;
         }
         const lastRow = stmts.lastSiblingPosition.get(payload.parent_id ?? null) as

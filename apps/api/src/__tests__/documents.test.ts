@@ -20,6 +20,7 @@ import { initUserDb } from '../db/database';
 import type { UserDbHandle } from '../db/database';
 
 const TEST_USER_ID = 'test-user-docs';
+const MAX_NOTE_CHARS = 4_000;
 
 describe('PUT /api/documents/:id — old src file cleanup', () => {
   let tmpDir: string;
@@ -203,5 +204,45 @@ describe('PUT /api/documents/:id — old src file cleanup', () => {
       body: JSON.stringify({ properties: { src: '/uploads/x/y.png' } }),
     });
     expect(res.status).toBe(404);
+  });
+
+  it('rejects note creation when title exceeds the note length cap', async () => {
+    const tooLong = 'x'.repeat(MAX_NOTE_CHARS + 1);
+    const res = await fetch(`${baseUrl}/api/documents`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'note', position: 'a0', properties: { title: tooLong } }),
+    });
+
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error?: string };
+    expect(body.error).toContain(`max ${MAX_NOTE_CHARS} characters`);
+  });
+
+  it('skips oversize note create operations in structural sync', async () => {
+    const tooLong = 'x'.repeat(MAX_NOTE_CHARS + 1);
+    const noteId = randomUUID();
+    const ts = Date.now();
+
+    const res = await fetch(`${baseUrl}/api/documents/sync/structural`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ops: [
+          {
+            op: 'create',
+            id: noteId,
+            client_ts: ts,
+            payload: { type: 'note', parent_id: null, properties: { title: tooLong } },
+          },
+        ],
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as { applied: number; skipped: number; documents: Array<{ id: string }> };
+    expect(body.applied).toBe(0);
+    expect(body.skipped).toBe(1);
+    expect(body.documents.find((d) => d.id === noteId)).toBeUndefined();
   });
 });
