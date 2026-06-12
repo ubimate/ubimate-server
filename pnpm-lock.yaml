@@ -246,6 +246,25 @@ importers:
         specifier: 7.3.1
         version: 7.3.1(@types/node@22.13.14)(tsx@4.19.3)
 
+  apps/mobile/e2e:
+    dependencies:
+      '@playwright/test':
+        specifier: 1.58.2
+        version: 1.58.2
+      '@srsholmes/tauri-playwright':
+        specifier: ^0.2
+        version: 0.2.2(@playwright/test@1.58.2)
+    devDependencies:
+      '@types/node':
+        specifier: ^22
+        version: 22.15.0
+      cross-env:
+        specifier: ^7.0.3
+        version: 7.0.3
+      typescript:
+        specifier: ^5
+        version: 5.9.3
+
   apps/web:
     dependencies:
       '@dnd-kit/core':
