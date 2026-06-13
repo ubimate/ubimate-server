@@ -254,6 +254,9 @@ importers:
       '@srsholmes/tauri-playwright':
         specifier: ^0.2
         version: 0.2.2(@playwright/test@1.58.2)
+      '@ubimate/crypto':
+        specifier: workspace:*
+        version: link:../../../packages/crypto
     devDependencies:
       '@types/node':
         specifier: ^22
