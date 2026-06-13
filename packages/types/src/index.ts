@@ -56,6 +56,15 @@ export interface CreateDocumentPayload {
    * Base64 crypto_box_seal(workspace_content_key, user.x25519PublicKey).
    */
   wrappedWorkspaceKey?: string;
+  /**
+   * Tauri local-first only: the encrypted (`{ _enc }`) properties to forward to
+   * the cloud, while `properties` (plaintext) is stored in local SQLite. Used
+   * when creating a workspace whose content key isn't yet resolvable by the
+   * property-encryption wrapper, so the local copy stays plaintext (local-first)
+   * while the cloud copy remains zero-knowledge. Ignored by the cloud-direct
+   * (web) client and never persisted server-side.
+   */
+  cloudProperties?: Record<string, unknown>;
 }
 
 /**
@@ -150,6 +159,14 @@ export interface User {
   created_at: number; // Unix ms
   /** Base64-encoded Ed25519 public key. Null for pre-ZK accounts. */
   public_key: string | null;
+  /**
+   * ID of the user's protected "home" workspace — created at registration and
+   * never deletable. Quick-capture notes are filed here by default so a capture
+   * can never silently land in a shared workspace. Optional/null for legacy
+   * accounts created before this field existed; the server backfills it to the
+   * oldest workspace on the next login.
+   */
+  primary_workspace_id?: string | null;
 }
 
 // ---------------------------------------------------------------------------

@@ -110,6 +110,12 @@ export interface UserRow {
   user_type: string;
   /** Mutable contact address for billing and notifications. NULL means use `email`. Has no cryptographic role. */
   contact_email: string | null;
+  /**
+   * ID of the user's protected "home" workspace. Created at registration and
+   * never deletable; quick-capture notes default here. NULL for legacy accounts
+   * until backfilled by resolvePrimaryWorkspaceId() on next login.
+   */
+  primary_workspace_id: string | null;
 }
 
 /**
@@ -212,6 +218,15 @@ registryDb.exec(`
   }
 }
 
+// Migration — add primary_workspace_id column if it does not already exist.
+// This is the user's protected "home" workspace (see User.primary_workspace_id).
+{
+  const userCols = (registryDb.pragma('table_info(users)') as { name: string }[]).map((c) => c.name);
+  if (!userCols.includes('primary_workspace_id')) {
+    registryDb.exec(`ALTER TABLE users ADD COLUMN primary_workspace_id TEXT`);
+  }
+}
+
 // Migrations — add ZK #5 columns if they do not already exist.
 {
   const cols = (registryDb.pragma('table_info(invitations)') as { name: string }[]).map((c) => c.name);
@@ -266,6 +281,9 @@ export const registryStmts = {
   `),
   updateUserType: registryDb.prepare(`
     UPDATE users SET user_type = @user_type WHERE id = @id
+  `),
+  setPrimaryWorkspaceId: registryDb.prepare(`
+    UPDATE users SET primary_workspace_id = @primary_workspace_id WHERE id = @id
   `),
   updateUserForCredentialReset: registryDb.prepare(`
     UPDATE users
@@ -339,6 +357,26 @@ export interface CredentialResetTokenRow {
 
 export function withRegistryTransaction<T>(fn: () => T): T {
   return registryDb.transaction(fn)();
+}
+
+/**
+ * Return the user's protected "home" workspace id, backfilling it for legacy
+ * accounts that predate the column. The home workspace is the one created at
+ * registration; for legacy users we adopt the oldest granted workspace key
+ * (the registration workspace for the vast majority of accounts) and persist
+ * it so the value is stable across logins and enforceable by the delete guard.
+ * Returns null only when the user holds no workspace keys at all.
+ */
+export function resolvePrimaryWorkspaceId(userId: string): string | null {
+  const user = registryStmts.getUserById.get(userId) as UserRow | undefined;
+  if (!user) return null;
+  if (user.primary_workspace_id) return user.primary_workspace_id;
+
+  const keys = registryStmts.listWorkspaceKeysForUser.all(userId) as WorkspaceKeyRow[];
+  if (keys.length === 0) return null;
+  const oldest = keys.reduce((a, b) => (a.granted_at <= b.granted_at ? a : b));
+  registryStmts.setPrimaryWorkspaceId.run({ id: userId, primary_workspace_id: oldest.workspace_id });
+  return oldest.workspace_id;
 }
 
 /** Close the shared registry DB. Intended for tests that load the module in isolation. */

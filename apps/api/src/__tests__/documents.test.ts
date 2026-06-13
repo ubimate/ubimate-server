@@ -245,4 +245,121 @@ describe('PUT /api/documents/:id — old src file cleanup', () => {
     expect(body.skipped).toBe(1);
     expect(body.documents.find((d) => d.id === noteId)).toBeUndefined();
   });
+
+  it('persists wrappedWorkspaceKey when a workspace is created via structural sync', async () => {
+    const workspaceId = randomUUID();
+    const ts = Date.now();
+    const wrappedKey = 'sealed-workspace-key-base64';
+
+    const res = await fetch(`${baseUrl}/api/documents/sync/structural`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ops: [
+          {
+            op: 'create',
+            id: workspaceId,
+            client_ts: ts,
+            payload: {
+              type: 'workspace',
+              parent_id: null,
+              properties: { _enc: 'ciphertext' },
+              wrappedWorkspaceKey: wrappedKey,
+            },
+          },
+        ],
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as { applied: number };
+    expect(body.applied).toBe(1);
+
+    const { registryStmts } = await import('../db/registry');
+    const row = registryStmts.getWorkspaceKeyForUser.get(workspaceId, TEST_USER_ID) as
+      | { workspace_id: string; wrapped_key: string }
+      | undefined;
+    expect(row).toBeDefined();
+    expect(row?.wrapped_key).toBe(wrappedKey);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Home (primary) workspace protection
+  // ---------------------------------------------------------------------------
+
+  /** Seed a registry user row for TEST_USER_ID and mark `workspaceId` as the home workspace. */
+  async function seedHomeWorkspace(workspaceId: string): Promise<void> {
+    const { registryStmts } = await import('../db/registry');
+    const existing = registryStmts.getUserById.get(TEST_USER_ID);
+    if (!existing) {
+      registryStmts.createUser.run({
+        id: TEST_USER_ID,
+        email: 'docs@example.com',
+        properties: '{}',
+        created_at: Date.now(),
+        status: 'active',
+        public_key: null,
+        wrapped_content_key: null,
+        user_type: 'regular',
+      });
+    }
+    registryStmts.setPrimaryWorkspaceId.run({ id: TEST_USER_ID, primary_workspace_id: workspaceId });
+  }
+
+  it('refuses to move the home workspace to trash', async () => {
+    const wsId = await createDoc('workspace', { _enc: 'x' });
+    await seedHomeWorkspace(wsId);
+
+    const res = await fetch(`${baseUrl}/api/documents/${wsId}/trash`, { method: 'PATCH' });
+    expect(res.status).toBe(403);
+    const body = await res.json() as { error?: string };
+    expect(body.error).toContain('home workspace');
+
+    // The workspace must still be active (status unchanged).
+    const after = await fetch(`${baseUrl}/api/documents/${wsId}`);
+    const doc = await after.json() as { status?: number };
+    expect((doc.status ?? 0) & 2).toBe(0);
+  });
+
+  it('refuses to permanently delete the home workspace', async () => {
+    const wsId = await createDoc('workspace', { _enc: 'x' });
+    await seedHomeWorkspace(wsId);
+
+    const res = await fetch(`${baseUrl}/api/documents/${wsId}`, { method: 'DELETE' });
+    expect(res.status).toBe(403);
+
+    const after = await fetch(`${baseUrl}/api/documents/${wsId}`);
+    expect(after.status).toBe(200);
+  });
+
+  it('skips a structural delete op that targets the home workspace', async () => {
+    const wsId = await createDoc('workspace', { _enc: 'x' });
+    await seedHomeWorkspace(wsId);
+
+    const res = await fetch(`${baseUrl}/api/documents/sync/structural`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ops: [{ op: 'delete', id: wsId, client_ts: Date.now() + 10_000 }],
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { applied: number; skipped: number };
+    expect(body.applied).toBe(0);
+    expect(body.skipped).toBe(1);
+
+    const after = await fetch(`${baseUrl}/api/documents/${wsId}`);
+    expect(after.status).toBe(200);
+  });
+
+  it('still allows trashing a non-home workspace', async () => {
+    const homeId = await createDoc('workspace', { _enc: 'home' });
+    await seedHomeWorkspace(homeId);
+    const otherId = await createDoc('workspace', { _enc: 'other' });
+
+    const res = await fetch(`${baseUrl}/api/documents/${otherId}/trash`, { method: 'PATCH' });
+    expect(res.status).toBe(200);
+    const doc = await res.json() as { status?: number };
+    expect((doc.status ?? 0) & 2).toBe(2);
+  });
 });

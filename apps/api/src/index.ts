@@ -14,7 +14,7 @@ import { adminRouter } from './routes/admin';
 import { workspacesRouter } from './routes/workspaces';
 import { demoRouter, scheduleDemoCleanup } from './routes/demo';
 import { requireAuth } from './middleware/auth';
-import { hocuspocus } from './hocuspocus';
+import { relay } from './relay';
 
 const NO_IMAGE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 150" width="200" height="150">
   <rect width="200" height="150" fill="#f5f5f5" rx="6"/>
@@ -167,12 +167,12 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 // ---------------------------------------------------------------------------
-// Unified HTTP server – Express + Hocuspocus on a single port
+// Unified HTTP server – Express + zero-knowledge Yjs relay on a single port
 // ---------------------------------------------------------------------------
 
 const server = createServer(app);
 
-// Handle WebSocket upgrades for Hocuspocus (Yjs collaboration).
+// Handle WebSocket upgrades for the encrypted Yjs relay (collaboration).
 // Client connects to: ws(s)://host:port/yjs/<documentName>
 const wss = new WebSocketServer({ noServer: true });
 
@@ -199,7 +199,7 @@ server.on('upgrade', (request, socket, head) => {
           );
         }
       });
-      hocuspocus.handleConnection(ws, request);
+      relay.handleConnection(ws, request);
     });
   } else {
     console.warn(

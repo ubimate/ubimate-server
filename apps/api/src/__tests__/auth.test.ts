@@ -94,6 +94,7 @@ describe('auth router', () => {
   it('registers an invited account and can issue a login token (ZK path)', async () => {
     const email = 'alice@example.com';
     const keypair = generateTestKeypair();
+    const initialWorkspaceId = randomUUID();
 
     const registerRes = await fetch(`${baseUrl}/api/auth/register`, {
       method: 'POST',
@@ -103,19 +104,21 @@ describe('auth router', () => {
         name: 'Alice Example',
         invitationToken: 'invite-token-123',
         publicKey: keypair.publicKeyBase64,
-        initialWorkspaceId: randomUUID(),
+        initialWorkspaceId,
         initialWrappedWorkspaceKey: 'wrapped-key-base64',
       }),
     });
 
     expect(registerRes.status).toBe(201);
     const registerBody = await registerRes.json() as {
-      user: { id: string; email: string; properties: Record<string, unknown>; public_key: string | null };
+      user: { id: string; email: string; properties: Record<string, unknown>; public_key: string | null; primary_workspace_id: string | null };
       workspace_keys: { workspace_id: string; wrapped_key: string }[];
     };
     expect(registerBody.user.email).toBe(email);
     expect(registerBody.user.properties).toEqual({ name: 'Alice Example' });
     expect(registerBody.user.public_key).toBe(keypair.publicKeyBase64);
+    // The initial workspace is the protected "home" workspace.
+    expect(registerBody.user.primary_workspace_id).toBe(initialWorkspaceId);
 
     const { registryStmts, parseUserProperties } = await import('../db/registry');
     const userRow = registryStmts.getUserByEmail.get(email) as {
@@ -144,9 +147,51 @@ describe('auth router', () => {
     });
 
     expect(loginRes.status).toBe(200);
-    const loginBody = await loginRes.json() as { token: string; workspace_keys: { workspace_id: string; wrapped_key: string }[] };
+    const loginBody = await loginRes.json() as { token: string; user: { primary_workspace_id: string | null }; workspace_keys: { workspace_id: string; wrapped_key: string }[] };
     expect(typeof loginBody.token).toBe('string');
     expect(loginBody.workspace_keys[0]?.wrapped_key).toBe('wrapped-key-base64');
+    expect(loginBody.user.primary_workspace_id).toBe(initialWorkspaceId);
+  });
+
+  it('backfills primary_workspace_id to the oldest workspace key for legacy accounts', async () => {
+    const email = 'legacy@example.com';
+    const keypair = generateTestKeypair();
+    const homeWorkspaceId = randomUUID();
+
+    const registerRes = await fetch(`${baseUrl}/api/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email,
+        invitationToken: 'invite-token-123',
+        publicKey: keypair.publicKeyBase64,
+        initialWorkspaceId: homeWorkspaceId,
+        initialWrappedWorkspaceKey: 'wrapped-key-base64',
+      }),
+    });
+    expect(registerRes.status).toBe(201);
+    const { user } = await registerRes.json() as { user: { id: string } };
+
+    const { registryStmts, resolvePrimaryWorkspaceId } = await import('../db/registry');
+
+    // Simulate a legacy account: clear the stored home id and add an OLDER
+    // workspace key, so the backfill must select by granted_at, not insertion.
+    registryStmts.setPrimaryWorkspaceId.run({ id: user.id, primary_workspace_id: null });
+    const olderWorkspaceId = randomUUID();
+    registryStmts.insertWorkspaceKey.run({
+      workspace_id: olderWorkspaceId,
+      user_id: user.id,
+      wrapped_key: 'older-wrapped-key',
+      granted_at: Date.now() - 60_000,
+    });
+
+    const resolved = resolvePrimaryWorkspaceId(user.id);
+    expect(resolved).toBe(olderWorkspaceId);
+
+    // The backfill is persisted, so a second call is stable.
+    const persisted = registryStmts.getUserById.get(user.id) as { primary_workspace_id: string | null };
+    expect(persisted.primary_workspace_id).toBe(olderWorkspaceId);
+    expect(resolvePrimaryWorkspaceId(user.id)).toBe(olderWorkspaceId);
   });
 
   it('GET /challenge returns a nonce and reflects has_zk_keys correctly', async () => {

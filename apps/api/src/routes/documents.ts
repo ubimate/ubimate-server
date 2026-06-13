@@ -1,8 +1,7 @@
 import { Router, Request, Response } from 'express';
-import { randomUUID, createHash } from 'crypto';
+import { randomUUID } from 'crypto';
 import path from 'path';
 import fs from 'fs';
-import * as Y from 'yjs';
 import type {
   Document,
   DocumentType,
@@ -15,7 +14,7 @@ import type {
 } from '@ubimate/types';
 import { generateKeyBetween } from '@ubimate/utils';
 import { requireAuth } from '../middleware/auth';
-import { registryStmts } from '../db/registry';
+import { registryStmts, resolvePrimaryWorkspaceId } from '../db/registry';
 
 const DATA_DIR = process.env.DATA_DIR ?? path.join(__dirname, '../../data');
 const MAX_NOTE_CHARS = 4_000;
@@ -333,6 +332,10 @@ documentsRouter.post('/sync/structural', (req: Request, res: Response) => {
     return res.status(400).json({ error: '`ops` must be an array' });
   }
 
+  // The protected home workspace can never be deleted — skip any delete op that
+  // targets it (e.g. a stale offline tombstone replayed from another device).
+  const primaryWorkspaceId = resolvePrimaryWorkspaceId(req.userId);
+
   // Sort ascending so older decisions are applied first; newer ones overwrite.
   // For 'create' ops we additionally ensure parents precede children by doing a
   // topological sort: build a map of id→parent_id from create ops, then order
@@ -411,6 +414,18 @@ documentsRouter.post('/sync/structural', (req: Request, res: Response) => {
           status:        payload.status ?? 0,
           status_timestamp: payload.status_timestamp ?? null,
         });
+
+        // When a new workspace is created via offline-sync replay, persist the
+        // caller's sealed copy of its content key (key-per-workspace model) so
+        // it can be recovered on re-login and shared with collaborators.
+        if (payload.type === 'workspace' && payload.wrappedWorkspaceKey && typeof payload.wrappedWorkspaceKey === 'string') {
+          registryStmts.insertWorkspaceKey.run({
+            workspace_id: op.id,
+            user_id: req.userId,
+            wrapped_key: payload.wrappedWorkspaceKey,
+            granted_at: op.client_ts,
+          });
+        }
         applied++;
         continue;
       }
@@ -422,6 +437,8 @@ documentsRouter.post('/sync/structural', (req: Request, res: Response) => {
         // from removing an item that was renamed/moved more recently).
         // ------------------------------------------------------------------
         if (!existing) { skipped++; continue; }
+        // The home workspace is protected and can never be deleted.
+        if (op.id === primaryWorkspaceId) { skipped++; continue; }
         if (op.client_ts <= existing.last_struct_ts) { skipped++; continue; }
 
         const deleteNow = Date.now();
@@ -529,6 +546,9 @@ documentsRouter.patch('/:id/trash', (req: Request, res: Response) => {
   const { db, stmts } = req.userDbHandle;
   const existing = stmts.getDocument.get(req.params.id) as DocumentRow | undefined;
   if (!existing) return res.status(404).json({ error: 'Document not found' });
+  if (req.params.id === resolvePrimaryWorkspaceId(req.userId)) {
+    return res.status(403).json({ error: 'The home workspace cannot be deleted.' });
+  }
   const now = Date.now();
   db.prepare(`
     WITH RECURSIVE subtree(id) AS (
@@ -601,6 +621,9 @@ documentsRouter.delete('/:id', (req: Request, res: Response) => {
   const { db, stmts } = req.userDbHandle;
   const existing = stmts.getDocument.get(req.params.id) as DocumentRow | undefined;
   if (!existing) return res.status(404).json({ error: 'Document not found' });
+  if (req.params.id === resolvePrimaryWorkspaceId(req.userId)) {
+    return res.status(403).json({ error: 'The home workspace cannot be deleted.' });
+  }
 
   const userUploadsDir = path.join(DATA_DIR, 'uploads', req.userId);
 
@@ -644,37 +667,39 @@ documentsRouter.delete('/:id', (req: Request, res: Response) => {
 
 // ---------------------------------------------------------------------------
 // GET /api/documents/:id/yjs
-// Returns the full Yjs state for a document as a base64-encoded binary blob.
-// The Tauri client uses this during initial Yjs sync to fetch the cloud state.
+// Returns the document's stored Yjs updates as an ordered list of opaque
+// base64 blobs. These blobs are end-to-end encrypted (zero-knowledge): the
+// server NEVER decodes them. The client decrypts each blob with the workspace
+// content key and merges them locally. Used by the Tauri desktop client during
+// initial / reconnect catch-up sync.
 // ---------------------------------------------------------------------------
 documentsRouter.get('/:id/yjs', (req: Request, res: Response) => {
   const { getYjsUpdates } = req.userDbHandle;
   const updates = getYjsUpdates(req.params.id);
-
-  if (updates.length === 0) {
-    // Document has no Yjs content on the server — return an empty update.
-    return res.json({ state: null });
-  }
-
-  // Merge all stored update rows into a single Y.Doc, then encode as one
-  // compact binary blob (equivalent to compact_yjs_updates).
-  const ydoc = new Y.Doc();
-  for (const update of updates) {
-    Y.applyUpdate(ydoc, update);
-  }
-  const state = Buffer.from(Y.encodeStateAsUpdate(ydoc)).toString('base64');
-  return res.json({ state });
+  // Opaque pass-through: emit the stored blobs verbatim, in order.
+  const blobs = updates.map((u) => Buffer.from(u).toString('base64'));
+  return res.json({ updates: blobs });
 });
 
 // ---------------------------------------------------------------------------
 // POST /api/documents/:id/yjs
-// Accepts a Yjs state update (base64-encoded binary), applies it to the
-// server's stored state, and broadcasts to any connected Hocuspocus clients.
+// Accepts a single opaque (encrypted) Yjs blob and stores it. The server never
+// decodes the bytes, so it cannot merge updates or compute a state vector —
+// compaction is client-driven via `replace`, and the state-vector hash is
+// supplied by the client and stored verbatim.
 //
-// Body: { update: string }  — base64-encoded Yjs update binary
+// Body: { update: string; yjs_sv_hash?: string; replace?: boolean }
+//   - update: base64-encoded opaque (encrypted) Yjs blob
+//   - yjs_sv_hash: client-computed hash of the merged state (stored as-is)
+//   - replace: when true, replace ALL stored blobs with this single snapshot
+//              (client-driven compaction); otherwise append.
 // ---------------------------------------------------------------------------
 documentsRouter.post('/:id/yjs', (req: Request, res: Response) => {
-  const { update } = req.body as { update?: string };
+  const { update, yjs_sv_hash, replace } = req.body as {
+    update?: string;
+    yjs_sv_hash?: string;
+    replace?: boolean;
+  };
   if (typeof update !== 'string' || !update) {
     return res.status(400).json({ error: 'update (base64 string) is required' });
   }
@@ -686,25 +711,16 @@ documentsRouter.post('/:id/yjs', (req: Request, res: Response) => {
     return res.status(400).json({ error: 'update must be a valid base64 string' });
   }
 
-  const { appendYjsUpdate, compactYjsUpdates, getYjsUpdates } = req.userDbHandle;
+  const { appendYjsUpdate, compactYjsUpdates } = req.userDbHandle;
 
-  // Append the incoming delta to the persistent store.
-  appendYjsUpdate(req.params.id, updateBytes);
-
-  // Always compute and store the hash so subsequent yjs-check calls can
-  // compare hashes and skip unchanged documents.  This endpoint is only
-  // called during sync (live editing goes through the Hocuspocus WebSocket).
-  const allUpdates = getYjsUpdates(req.params.id);
-  const ydoc = new Y.Doc();
-  for (const u of allUpdates) Y.applyUpdate(ydoc, u);
-  const svHash = createHash('sha256').update(Y.encodeStateVector(ydoc)).digest('hex');
-
-  if (allUpdates.length >= 50) {
-    // Compact: merge all rows into a single snapshot.
-    const snapshot = Y.encodeStateAsUpdate(ydoc);
-    compactYjsUpdates(req.params.id, snapshot, svHash);
+  if (replace) {
+    // Client-driven compaction: replace the stored blobs with one snapshot.
+    compactYjsUpdates(req.params.id, updateBytes, yjs_sv_hash ?? null);
   } else {
-    req.userDbHandle.stmts.updateYjsSvHash.run({ id: req.params.id, yjs_sv_hash: svHash });
+    appendYjsUpdate(req.params.id, updateBytes);
+    if (yjs_sv_hash) {
+      req.userDbHandle.stmts.updateYjsSvHash.run({ id: req.params.id, yjs_sv_hash });
+    }
   }
 
   return res.status(204).end();
@@ -713,11 +729,12 @@ documentsRouter.post('/:id/yjs', (req: Request, res: Response) => {
 // ---------------------------------------------------------------------------
 // POST /api/documents/sync/yjs-check
 // Batch endpoint: accepts an array of { id, yjs_sv_hash } pairs from the
-// client, compares against the server's stored hashes, and returns the full
-// Yjs state (base64) only for documents whose hash doesn't match.
+// client and returns the ids of documents whose content differs from the
+// client's. The hash is an opaque client-computed value compared verbatim —
+// the server never decodes the encrypted blobs.
 //
 // Body: { docs: Array<{ id: string; yjs_sv_hash: string | null }> }
-// Response: { changed: Array<{ id: string; state: string | null; yjs_sv_hash: string | null }> }
+// Response: { changed: Array<{ id: string; yjs_sv_hash: string | null }> }
 // ---------------------------------------------------------------------------
 documentsRouter.post('/sync/yjs-check', (req: Request, res: Response) => {
   const { docs } = req.body as { docs?: Array<{ id: string; yjs_sv_hash: string | null }> };
@@ -725,39 +742,24 @@ documentsRouter.post('/sync/yjs-check', (req: Request, res: Response) => {
     return res.status(400).json({ error: 'docs array is required' });
   }
 
-  const { getYjsUpdates, stmts } = req.userDbHandle;
-  const changed: Array<{ id: string; state: string | null; yjs_sv_hash: string | null }> = [];
+  const { countYjsUpdates, stmts } = req.userDbHandle;
+  const changed: Array<{ id: string; yjs_sv_hash: string | null }> = [];
 
   for (const { id, yjs_sv_hash: clientHash } of docs) {
-    // Look up the server-side hash.
     const row = stmts.getDocument.get(id) as DocumentRow | undefined;
     const serverHash = row?.yjs_sv_hash ?? null;
 
-    // If both hashes exist and match, skip this document.
+    // Both sides agree on the (opaque) hash — nothing to sync.
     if (clientHash && serverHash && clientHash === serverHash) continue;
 
-    // Hashes differ (or one/both are null) — check deeper.
-    const updates = getYjsUpdates(id);
-    if (updates.length === 0) {
-      // If client also has no content (null hash), nothing to sync — skip.
-      if (!clientHash) continue;
-      changed.push({ id, state: null, yjs_sv_hash: serverHash });
-    } else {
-      const ydoc = new Y.Doc();
-      for (const u of updates) Y.applyUpdate(ydoc, u);
-      // Compute the hash (cheap — state vector is tiny) before encoding
-      // the full state so we can bail out early when hashes match.
-      const hash = serverHash ?? createHash('sha256').update(Y.encodeStateVector(ydoc)).digest('hex');
-      // Persist the computed hash so future checks can skip this document.
-      if (!serverHash) {
-        stmts.updateYjsSvHash.run({ id, yjs_sv_hash: hash });
-      }
-      // If the freshly computed hash matches the client hash, content is
-      // identical — skip this document entirely.
-      if (clientHash && hash === clientHash) continue;
-      const state = Buffer.from(Y.encodeStateAsUpdate(ydoc)).toString('base64');
-      changed.push({ id, state, yjs_sv_hash: hash });
-    }
+    // No stored hash to compare against: fall back to "has any content?".
+    // The server cannot compute a hash from ciphertext, so when either side
+    // reports content we mark the document changed and let the client
+    // reconcile (it holds the key and does the real merge).
+    const serverHasContent = countYjsUpdates(id) > 0;
+    if (!clientHash && !serverHasContent) continue;
+
+    changed.push({ id, yjs_sv_hash: serverHash });
   }
 
   return res.json({ changed });
@@ -765,22 +767,26 @@ documentsRouter.post('/sync/yjs-check', (req: Request, res: Response) => {
 
 // ---------------------------------------------------------------------------
 // POST /api/documents/sync/yjs-push
-// Batch endpoint: accepts an array of Yjs deltas from the client and applies
-// them all to the server's Yjs store in one HTTP round-trip.
+// Batch endpoint: accepts an array of opaque (encrypted) Yjs blobs and stores
+// them in one HTTP round-trip. The server never decodes the bytes; compaction
+// is client-driven via per-entry `replace`, and hashes are stored verbatim.
 //
-// Body: { updates: Array<{ id: string; update: string; yjs_sv_hash: string }> }
-//   - update: base64-encoded Yjs update binary
+// Body: { updates: Array<{ id: string; update: string; yjs_sv_hash?: string; replace?: boolean }> }
+//   - update: base64-encoded opaque (encrypted) Yjs blob
 //   - yjs_sv_hash: client-computed hash of the merged state (stored as-is)
+//   - replace: when true, replace ALL stored blobs for this id with the snapshot
 // ---------------------------------------------------------------------------
 documentsRouter.post('/sync/yjs-push', (req: Request, res: Response) => {
-  const { updates } = req.body as { updates?: Array<{ id: string; update: string; yjs_sv_hash?: string }> };
+  const { updates } = req.body as {
+    updates?: Array<{ id: string; update: string; yjs_sv_hash?: string; replace?: boolean }>;
+  };
   if (!Array.isArray(updates)) {
     return res.status(400).json({ error: 'updates array is required' });
   }
 
-  const { appendYjsUpdate, countYjsUpdates, compactYjsUpdates, getYjsUpdates } = req.userDbHandle;
+  const { appendYjsUpdate, compactYjsUpdates } = req.userDbHandle;
 
-  for (const { id, update, yjs_sv_hash } of updates) {
+  for (const { id, update, yjs_sv_hash, replace } of updates) {
     if (typeof update !== 'string' || !update) continue;
 
     let updateBytes: Buffer;
@@ -790,20 +796,13 @@ documentsRouter.post('/sync/yjs-push', (req: Request, res: Response) => {
       continue; // skip malformed entry
     }
 
-    appendYjsUpdate(id, updateBytes);
-
-    const rowCount = countYjsUpdates(id);
-    if (rowCount >= 50) {
-      const allUpdates = getYjsUpdates(id);
-      const ydoc = new Y.Doc();
-      for (const u of allUpdates) Y.applyUpdate(ydoc, u);
-      const snapshot = Y.encodeStateAsUpdate(ydoc);
-      const svHash = yjs_sv_hash ?? createHash('sha256').update(Y.encodeStateVector(ydoc)).digest('hex');
-      compactYjsUpdates(id, snapshot, svHash);
-    } else if (yjs_sv_hash) {
-      // Even when not compacting, update the stored hash so subsequent
-      // sync-check calls reflect the latest state.
-      req.userDbHandle.stmts.updateYjsSvHash.run({ id, yjs_sv_hash });
+    if (replace) {
+      compactYjsUpdates(id, updateBytes, yjs_sv_hash ?? null);
+    } else {
+      appendYjsUpdate(id, updateBytes);
+      if (yjs_sv_hash) {
+        req.userDbHandle.stmts.updateYjsSvHash.run({ id, yjs_sv_hash });
+      }
     }
   }
 
