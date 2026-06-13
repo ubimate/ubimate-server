@@ -15,15 +15,7 @@ import path from 'node:path';
 import jwt from 'jsonwebtoken';
 import rateLimit from 'express-rate-limit';
 import { trackEvent } from '../analytics';
-// altcha-lib v1: use require() because moduleResolution:node can't resolve
-// types via package exports conditions, and the deep path isn't in the
-// exports map so Node rejects it at runtime. The './v1' subpath is exported
-// and has CJS + ESM entries, so require() works in both tsx and compiled JS.
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const { createChallenge, verifySolution } = require('altcha-lib/v1') as {
-  createChallenge(opts: { algorithm?: string; hmacKey: string; maxNumber?: number; expires?: Date }): Promise<{ algorithm: string; challenge: string; maxnumber: number; salt: string; signature: string }>;
-  verifySolution(payload: string, hmacKey: string, checkExpires?: boolean): Promise<boolean>;
-};
+import { issueCaptchaChallenge, verifyCaptchaPayload } from '../lib/captcha';
 import { registryStmts, getUserType } from '../db/registry';
 import type { UserRow } from '../db/registry';
 import { closeUserDb, getUserDb } from '../db/userDb';
@@ -43,14 +35,6 @@ const MAX_DEMO_USERS           = process.env.MAX_DEMO_USERS !== undefined
   ? parseInt(process.env.MAX_DEMO_USERS, 10)
   : 200;
 const DEMO_FREETRIAL_DAYS      = Number(process.env.DEMO_FREETRIAL_DAYS)      || 14;
-/**
- * HMAC key used to sign ALTCHA PoW challenges. When absent in dev the server
- * generates a random ephemeral key per process restart (not suitable for
- * multi-instance deployments). Set ALTCHA_HMAC_KEY in production.
- */
-const ALTCHA_HMAC_KEY = process.env.ALTCHA_HMAC_KEY ?? randomBytes(32).toString('hex');
-/** PoW difficulty: max random number the client must search up to. ~1-3 s CPU. */
-const ALTCHA_MAX_NUMBER = Number(process.env.ALTCHA_MAX_NUMBER) || 100_000;
 const DATA_DIR = process.env.DATA_DIR ?? path.join(__dirname, '../../data');
 
 const SESSION_COOKIE = 'nf_session';
@@ -91,11 +75,7 @@ demoRouter.get('/challenge', demoLimiter, async (_req: Request, res: Response) =
     res.status(403).json({ error: 'Demo mode is disabled' });
     return;
   }
-  const challenge = await createChallenge({
-    hmacKey:   ALTCHA_HMAC_KEY,
-    maxNumber: ALTCHA_MAX_NUMBER,
-    expires:   new Date(Date.now() + 10 * 60 * 1000),
-  });
+  const challenge = await issueCaptchaChallenge();
   res.json(challenge);
 });
 
@@ -113,15 +93,11 @@ demoRouter.post('/provision', demoLimiter, async (req: Request, res: Response) =
 
   // Verify the ALTCHA proof-of-work payload submitted by the client.
   // Skipped when ALTCHA_HMAC_KEY is not explicitly set (local dev / test).
-  if (process.env.ALTCHA_HMAC_KEY) {
+  {
     const { altcha_payload } = req.body as { altcha_payload?: string };
-    if (!altcha_payload) {
-      res.status(400).json({ error: 'CAPTCHA solution required' });
-      return;
-    }
-    const valid = await verifySolution(altcha_payload, process.env.ALTCHA_HMAC_KEY, true);
-    if (!valid) {
-      res.status(403).json({ error: 'CAPTCHA solution invalid or expired' });
+    const captcha = await verifyCaptchaPayload(altcha_payload);
+    if (!captcha.ok) {
+      res.status(captcha.status).json({ error: captcha.error });
       return;
     }
   }

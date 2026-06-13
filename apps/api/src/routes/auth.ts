@@ -7,6 +7,7 @@ import { registryStmts, parseUserProperties, resolvePrimaryWorkspaceId } from '.
 import type { UserRow, InvitationRow, WorkspaceKeyRow } from '../db/registry';
 import { JWT_SECRET, JWT_EXPIRES_IN, requireAuth } from '../middleware/auth';
 import { getUserDb } from '../db/userDb';
+import { issueCaptchaChallenge, verifyCaptchaPayload } from '../lib/captcha';
 import type { AuthPayload } from '@ubimate/types';
 import { trackEvent } from '../analytics';
 
@@ -114,16 +115,40 @@ authRouter.get('/challenge', authLimiter, (req: Request, res: Response) => {
 });
 
 // ---------------------------------------------------------------------------
+// GET /api/auth/captcha — issue an ALTCHA proof-of-work challenge for register
+// ---------------------------------------------------------------------------
+// Public, unauthenticated registration is the spam-prone surface, so we gate
+// it behind a self-hosted proof-of-work. The PoW is invisible to users (the
+// client solves it silently) and works identically in a browser and inside a
+// Tauri WebView. Enforcement is active only when ALTCHA_HMAC_KEY is set.
+authRouter.get('/captcha', authLimiter, async (_req: Request, res: Response) => {
+  const challenge = await issueCaptchaChallenge();
+  res.json(challenge);
+});
+
+// ---------------------------------------------------------------------------
 // POST /api/auth/register
 // ---------------------------------------------------------------------------
 authRouter.post('/register', authLimiter, async (req: Request, res: Response) => {
-  const { email, name, invitationToken, publicKey, initialWorkspaceId, initialWrappedWorkspaceKey } = req.body as AuthPayload & {
+  const { email, name, invitationToken, publicKey, initialWorkspaceId, initialWrappedWorkspaceKey, initialWorkspaceProperties, altcha_payload } = req.body as AuthPayload & {
     name?: string;
     invitationToken?: string;
     publicKey?: string;
     initialWorkspaceId?: string;
     initialWrappedWorkspaceKey?: string;
+    initialWorkspaceProperties?: string;
+    altcha_payload?: string;
   };
+
+  // Verify the ALTCHA proof-of-work captcha before doing any work. Enforced
+  // only when ALTCHA_HMAC_KEY is configured (skipped in dev/test). Checked
+  // early — and independently of the email — so it can't be used to probe
+  // which accounts exist.
+  const captcha = await verifyCaptchaPayload(altcha_payload);
+  if (!captcha.ok) {
+    res.status(captcha.status).json({ error: captcha.error });
+    return;
+  }
 
   if (name !== undefined && (typeof name !== 'string' || name.trim().length > 100)) {
     res.status(400).json({ error: 'Name must not exceed 100 characters' });
@@ -143,6 +168,12 @@ authRouter.post('/register', authLimiter, async (req: Request, res: Response) =>
   }
   if (!initialWrappedWorkspaceKey || typeof initialWrappedWorkspaceKey !== 'string') {
     res.status(400).json({ error: 'initialWrappedWorkspaceKey is required' });
+    return;
+  }
+  // Optional pre-encrypted properties for the initial "home" workspace (title +
+  // icon). The server stores the ciphertext verbatim; it cannot read it (ZK).
+  if (initialWorkspaceProperties !== undefined && (typeof initialWorkspaceProperties !== 'string' || initialWorkspaceProperties.length > 8192)) {
+    res.status(400).json({ error: 'initialWorkspaceProperties must be a string up to 8192 characters' });
     return;
   }
 
@@ -201,7 +232,7 @@ authRouter.post('/register', authLimiter, async (req: Request, res: Response) =>
     parent_id: null,
     type: 'workspace',
     position: 'a0',
-    properties: '{}',
+    properties: initialWorkspaceProperties ?? '{}',
     created_at: now,
     updated_at: now,
     last_struct_ts: now,

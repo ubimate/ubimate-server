@@ -4,7 +4,7 @@
 import express from 'express';
 import cookieParser from 'cookie-parser';
 import { AddressInfo } from 'net';
-import { randomUUID, randomBytes } from 'crypto';
+import { randomUUID, randomBytes, createHash } from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -95,6 +95,7 @@ describe('auth router', () => {
     const email = 'alice@example.com';
     const keypair = generateTestKeypair();
     const initialWorkspaceId = randomUUID();
+    const initialWorkspaceProperties = JSON.stringify({ _enc: 'home-properties-cipher' });
 
     const registerRes = await fetch(`${baseUrl}/api/auth/register`, {
       method: 'POST',
@@ -106,6 +107,7 @@ describe('auth router', () => {
         publicKey: keypair.publicKeyBase64,
         initialWorkspaceId,
         initialWrappedWorkspaceKey: 'wrapped-key-base64',
+        initialWorkspaceProperties,
       }),
     });
 
@@ -133,6 +135,11 @@ describe('auth router', () => {
     const wsKeys = registryStmts.listWorkspaceKeysForUser.all(registerBody.user.id) as { wrapped_key: string }[];
     expect(wsKeys[0]?.wrapped_key).toBe('wrapped-key-base64');
 
+    // The pre-encrypted home workspace properties are stored verbatim (ZK).
+    const { getUserDb } = await import('../db/userDb');
+    const homeDoc = getUserDb(registerBody.user.id).stmts.getDocument.get(initialWorkspaceId) as { properties: string } | undefined;
+    expect(homeDoc?.properties).toBe(initialWorkspaceProperties);
+
     const invitationRow = registryStmts.getInvitationByToken.get('invite-token-123') as { accepted_at: number | null } | undefined;
     expect(invitationRow?.accepted_at).not.toBeNull();
 
@@ -151,6 +158,71 @@ describe('auth router', () => {
     expect(typeof loginBody.token).toBe('string');
     expect(loginBody.workspace_keys[0]?.wrapped_key).toBe('wrapped-key-base64');
     expect(loginBody.user.primary_workspace_id).toBe(initialWorkspaceId);
+  });
+
+  it('enforces the ALTCHA captcha on register when ALTCHA_HMAC_KEY is set', async () => {
+    // The register route reads process.env.ALTCHA_HMAC_KEY live (via the
+    // captcha module), so enabling it here flips enforcement on for the
+    // already-running server without re-importing.
+    process.env.ALTCHA_HMAC_KEY = 'auth-integration-captcha-key';
+    try {
+      const keypair = generateTestKeypair();
+      const base = {
+        name: 'Cap Tcha',
+        invitationToken: 'invite-token-123',
+        publicKey: keypair.publicKeyBase64,
+        initialWorkspaceId: randomUUID(),
+        initialWrappedWorkspaceKey: 'wrapped-key-base64',
+      };
+
+      // No payload → 400.
+      const noPayload = await fetch(`${baseUrl}/api/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: 'cap-none@example.com', ...base }),
+      });
+      expect(noPayload.status).toBe(400);
+      expect((await noPayload.json() as { error: string }).error).toMatch(/CAPTCHA/i);
+
+      // Garbage payload → 403.
+      const badPayload = await fetch(`${baseUrl}/api/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: 'cap-bad@example.com', ...base, altcha_payload: 'not-a-real-payload' }),
+      });
+      expect(badPayload.status).toBe(403);
+
+      // Fetch a real challenge, solve it, register → 201.
+      const chRes = await fetch(`${baseUrl}/api/auth/captcha`);
+      expect(chRes.status).toBe(200);
+      const ch = await chRes.json() as { algorithm: string; challenge: string; maxnumber: number; salt: string; signature: string };
+
+      let altchaPayload = '';
+      for (let n = 0; n <= ch.maxnumber; n++) {
+        const hex = createHash('sha256').update(ch.salt + n).digest('hex');
+        if (hex === ch.challenge) {
+          altchaPayload = Buffer.from(JSON.stringify({
+            algorithm: ch.algorithm,
+            challenge: ch.challenge,
+            number: n,
+            salt: ch.salt,
+            signature: ch.signature,
+            took: 1,
+          })).toString('base64');
+          break;
+        }
+      }
+      expect(altchaPayload).not.toBe('');
+
+      const okRes = await fetch(`${baseUrl}/api/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: 'cap-ok@example.com', ...base, altcha_payload: altchaPayload }),
+      });
+      expect(okRes.status).toBe(201);
+    } finally {
+      delete process.env.ALTCHA_HMAC_KEY;
+    }
   });
 
   it('backfills primary_workspace_id to the oldest workspace key for legacy accounts', async () => {
