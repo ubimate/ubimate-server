@@ -140,6 +140,13 @@ app.use('/uploads', requireAuth, (req: express.Request, res: express.Response) =
   }
   res.sendFile(target, (err) => {
     if (err) {
+      // The error often fires because the client aborted the request mid-stream
+      // (onaborted). By then the response may have already started, so writing
+      // the SVG fallback would throw ERR_HTTP_HEADERS_SENT — just end instead.
+      if (res.headersSent || req.aborted) {
+        res.end();
+        return;
+      }
       res.setHeader('Content-Type', 'image/svg+xml');
       res.send(NO_IMAGE_SVG);
     }

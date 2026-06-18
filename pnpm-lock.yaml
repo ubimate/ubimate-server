@@ -187,6 +187,12 @@ importers:
 
   apps/mobile-web:
     dependencies:
+      '@emoji-mart/data':
+        specifier: 1.2.1
+        version: 1.2.1
+      '@emoji-mart/react':
+        specifier: 1.1.1
+        version: 1.1.1(emoji-mart@5.6.0)(react@19.2.0)
       '@hocuspocus/provider':
         specifier: ^3.0.0
         version: 3.4.4(y-protocols@1.0.7)(yjs@13.6.27)
