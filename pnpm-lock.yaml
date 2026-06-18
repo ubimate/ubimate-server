@@ -190,6 +190,9 @@ importers:
       '@hocuspocus/provider':
         specifier: ^3.0.0
         version: 3.4.4(y-protocols@1.0.7)(yjs@13.6.27)
+      '@react-spring/web':
+        specifier: 10.1.1
+        version: 10.1.1(react-dom@19.2.0)(react@19.2.0)
       '@tiptap/extension-collaboration':
         specifier: ^2.11.0
         version: 2.27.2(@tiptap/core@2.27.2)(@tiptap/pm@2.27.2)(y-prosemirror@1.3.7)
@@ -205,6 +208,9 @@ importers:
       '@ubimate/types':
         specifier: workspace:*
         version: link:../../packages/types
+      '@use-gesture/react':
+        specifier: 10.3.1
+        version: 10.3.1(react@19.2.0)
       antd:
         specifier: 6.3.0
         version: 6.3.0(react-dom@19.2.0)(react@19.2.0)
@@ -2623,6 +2629,16 @@ packages:
       react-dom: 19.2.0(react@19.2.0)
     dev: false
 
+  /@react-spring/animated@10.1.1(react@19.2.0):
+    resolution: {integrity: sha512-kqdtIzr1GfBmbojnYhNdEhgu23f1rQ9H98K6KGmWHpNBP0gGZWN8KEIzGYwCAon7Q8ktGmsR1dCyy6QTI4egug==}
+    peerDependencies:
+      react: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
+    dependencies:
+      '@react-spring/shared': 10.1.1(react@19.2.0)
+      '@react-spring/types': 10.1.1
+      react: 19.2.0
+    dev: false
+
   /@react-spring/animated@9.6.1(react@19.2.0):
     resolution: {integrity: sha512-ls/rJBrAqiAYozjLo5EPPLLOb1LM0lNVQcXODTC1SMtS6DbuBCPaKco5svFUQFMP2dso3O+qcC4k9FsKc0KxMQ==}
     peerDependencies:
@@ -2630,6 +2646,17 @@ packages:
     dependencies:
       '@react-spring/shared': 9.6.1(react@19.2.0)
       '@react-spring/types': 9.6.1
+      react: 19.2.0
+    dev: false
+
+  /@react-spring/core@10.1.1(react@19.2.0):
+    resolution: {integrity: sha512-eCxEJuJzNxbfFXEr+BuMqp+LYv0fdvIO/lk6B+A/aUDxD4M4EBKizPqhCkMz/B+U12d99KTAUSmWaGul/Lly+w==}
+    peerDependencies:
+      react: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
+    dependencies:
+      '@react-spring/animated': 10.1.1(react@19.2.0)
+      '@react-spring/shared': 10.1.1(react@19.2.0)
+      '@react-spring/types': 10.1.1
       react: 19.2.0
     dev: false
 
@@ -2645,8 +2672,22 @@ packages:
       react: 19.2.0
     dev: false
 
+  /@react-spring/rafz@10.1.1:
+    resolution: {integrity: sha512-F7n2fU8EO8OokBkUHivU/tJ9HnL/QTIgd8V/2BhHFSrszt+OaLUoqEinomNeedLPIs24skiXQtki4APJHxghDQ==}
+    dev: false
+
   /@react-spring/rafz@9.6.1:
     resolution: {integrity: sha512-v6qbgNRpztJFFfSE3e2W1Uz+g8KnIBs6SmzCzcVVF61GdGfGOuBrbjIcp+nUz301awVmREKi4eMQb2Ab2gGgyQ==}
+    dev: false
+
+  /@react-spring/shared@10.1.1(react@19.2.0):
+    resolution: {integrity: sha512-pOoQPoOa+EPWrRndqIYlIms71fNB1p0IQVJcCi5xHtErqL8N0+jS1V9pExHfryqn9aUhHv0+7kMiVrcb6U+IBQ==}
+    peerDependencies:
+      react: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
+    dependencies:
+      '@react-spring/rafz': 10.1.1
+      '@react-spring/types': 10.1.1
+      react: 19.2.0
     dev: false
 
   /@react-spring/shared@9.6.1(react@19.2.0):
@@ -2659,8 +2700,27 @@ packages:
       react: 19.2.0
     dev: false
 
+  /@react-spring/types@10.1.1:
+    resolution: {integrity: sha512-C35b9XigBnwv1fZsUGR/lWzAKBskGhdAmf0LIBvqhwwHTYMtat4DXHZEnFyJQvfCAmpVc/d9Yug7j2Lbv2GDEA==}
+    dev: false
+
   /@react-spring/types@9.6.1:
     resolution: {integrity: sha512-POu8Mk0hIU3lRXB3bGIGe4VHIwwDsQyoD1F394OK7STTiX9w4dG3cTLljjYswkQN+hDSHRrj4O36kuVa7KPU8Q==}
+    dev: false
+
+  /@react-spring/web@10.1.1(react-dom@19.2.0)(react@19.2.0):
+    resolution: {integrity: sha512-G8jVDH8YPAo9ALWio0YcpwvZjXIt6LFwSKZtS4XeTNWIMNUH+sTm2Uy8dxEobTqyzQ5kvKwnMfS3LsOpKrVOag==}
+    peerDependencies:
+      react: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
+      react-dom: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
+    dependencies:
+      '@react-spring/animated': 10.1.1(react@19.2.0)
+      '@react-spring/core': 10.1.1(react@19.2.0)
+      '@react-spring/shared': 10.1.1(react@19.2.0)
+      '@react-spring/types': 10.1.1
+      csstype: 3.2.3
+      react: 19.2.0
+      react-dom: 19.2.0(react@19.2.0)
     dev: false
 
   /@react-spring/web@9.6.1(react-dom@19.2.0)(react@19.2.0):
@@ -4189,12 +4249,25 @@ packages:
     resolution: {integrity: sha512-rh+6MND31zfHcy9VU3dOZCqGY511lvGcfyJenN4cWZe0u1BH6brBpBddLVXhF2r4BMqWbvxfsbL7D287thJU2A==}
     dev: false
 
+  /@use-gesture/core@10.3.1:
+    resolution: {integrity: sha512-WcINiDt8WjqBdUXye25anHiNxPc0VOrlT8F6LLkU6cycrOGUDyY/yyFmsg3k8i5OLvv25llc0QC45GhR/C8llw==}
+    dev: false
+
   /@use-gesture/react@10.3.0(react@19.2.0):
     resolution: {integrity: sha512-3zc+Ve99z4usVP6l9knYVbVnZgfqhKah7sIG+PS2w+vpig2v2OLct05vs+ZXMzwxdNCMka8B+8WlOo0z6Pn6DA==}
     peerDependencies:
       react: '>= 16.8.0'
     dependencies:
       '@use-gesture/core': 10.3.0
+      react: 19.2.0
+    dev: false
+
+  /@use-gesture/react@10.3.1(react@19.2.0):
+    resolution: {integrity: sha512-Yy19y6O2GJq8f7CHf7L0nxL8bf4PZCPaVOCgJrusOeFHY1LvHgYXnmnXg6N5iwAnbgbZCDjo60SiM6IPJi9C5g==}
+    peerDependencies:
+      react: '>= 16.8.0'
+    dependencies:
+      '@use-gesture/core': 10.3.1
       react: 19.2.0
     dev: false
 
