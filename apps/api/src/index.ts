@@ -38,6 +38,11 @@ const DATA_DIR = process.env.DATA_DIR ?? path.join(__dirname, '../data');
 
 const app = express();
 
+// Trust the first reverse-proxy hop (CapRover / nginx / Caddy).
+// Required so express-rate-limit can read X-Forwarded-For without throwing
+// ERR_ERL_UNEXPECTED_X_FORWARDED_FOR when the app is deployed behind a proxy.
+app.set('trust proxy', 1);
+
 // Security headers — CSP is left to the reverse proxy / operator so the
 // pre-built SPAs (which use inline scripts from Vite) are not broken.
 app.use(helmet({ contentSecurityPolicy: false }));
