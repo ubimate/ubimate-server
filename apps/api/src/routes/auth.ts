@@ -70,7 +70,12 @@ const SESSION_COOKIE = 'nf_session';
 // Cookie options shared by set and clear.
 const COOKIE_BASE = {
   httpOnly: true,
-  sameSite: 'strict' as const,
+  // Production: Strict — no cross-site leakage.
+  // Development: Lax — allows the Tauri WKWebView (origin tauri://localhost or
+  // http://localhost:5175) to include the cookie on cross-port fetch() calls to
+  // http://localhost:3001 with credentials:'include'. Strict would strip the
+  // cookie on those requests, returning 401 and showing an empty page tree.
+  sameSite: (process.env.NODE_ENV === 'production' ? 'strict' : 'lax') as 'strict' | 'lax',
   // Secure flag: required in production (HTTPS). Omit in dev so plain http://localhost works.
   secure: process.env.NODE_ENV === 'production',
   path: '/',
@@ -299,6 +304,8 @@ authRouter.post('/login', authLimiter, async (req: Request, res: Response) => {
   }
   const normalizedEmail = email.trim().toLowerCase();
 
+  console.log(`[auth] login attempt email=${normalizedEmail} ip=${req.ip}`);
+
   if (!clientNonce || typeof clientNonce !== 'string' || typeof signature !== 'string') {
     res.status(400).json({ error: 'nonce and signature are required' });
     return;
@@ -307,12 +314,14 @@ authRouter.post('/login', authLimiter, async (req: Request, res: Response) => {
   const user = registryStmts.getUserByEmail.get(normalizedEmail) as UserRow | undefined;
 
   if (!user || !user.public_key) {
+    console.warn(`[auth] login failed reason=unknown_user email=${normalizedEmail} ip=${req.ip}`);
     res.status(401).json({ error: 'Invalid credentials' });
     return;
   }
 
   const stored = nonceStore.get(normalizedEmail);
   if (!stored || stored.consumed || stored.expiresAt < Date.now() || stored.nonce !== clientNonce) {
+    console.warn(`[auth] login failed reason=invalid_nonce email=${normalizedEmail} ip=${req.ip}`);
     res.status(401).json({ error: 'Invalid or expired nonce' });
     return;
   }
@@ -329,15 +338,18 @@ authRouter.post('/login', authLimiter, async (req: Request, res: Response) => {
   }
 
   if (!valid) {
+    console.warn(`[auth] login failed reason=invalid_signature email=${normalizedEmail} ip=${req.ip}`);
     res.status(401).json({ error: 'Invalid credentials' });
     return;
   }
 
   if (user.status !== 'active') {
+    console.warn(`[auth] login failed reason=inactive_account email=${normalizedEmail} ip=${req.ip}`);
     res.status(403).json({ error: 'Account is not active' });
     return;
   }
 
+  console.log(`[auth] login success userId=${user.id.slice(0, 8)} email=${normalizedEmail} ip=${req.ip}`);
   const token = jwt.sign({ sub: user.id, email: user.email }, JWT_SECRET, {
     expiresIn: JWT_EXPIRES_IN,
   });
@@ -373,6 +385,8 @@ authRouter.post('/login/token', authLimiter, async (req: Request, res: Response)
   }
   const normalizedEmail = email.trim().toLowerCase();
 
+  console.log(`[auth] login/token attempt email=${normalizedEmail} ip=${req.ip}`);
+
   if (!clientNonce || typeof clientNonce !== 'string' || typeof signature !== 'string') {
     res.status(400).json({ error: 'nonce and signature are required' });
     return;
@@ -381,12 +395,14 @@ authRouter.post('/login/token', authLimiter, async (req: Request, res: Response)
   const user = registryStmts.getUserByEmail.get(normalizedEmail) as UserRow | undefined;
 
   if (!user || !user.public_key) {
+    console.warn(`[auth] login/token failed reason=unknown_user email=${normalizedEmail} ip=${req.ip}`);
     res.status(401).json({ error: 'Invalid credentials' });
     return;
   }
 
   const stored = nonceStore.get(normalizedEmail);
   if (!stored || stored.consumed || stored.expiresAt < Date.now() || stored.nonce !== clientNonce) {
+    console.warn(`[auth] login/token failed reason=invalid_nonce email=${normalizedEmail} ip=${req.ip}`);
     res.status(401).json({ error: 'Invalid or expired nonce' });
     return;
   }
@@ -403,15 +419,18 @@ authRouter.post('/login/token', authLimiter, async (req: Request, res: Response)
   }
 
   if (!valid) {
+    console.warn(`[auth] login/token failed reason=invalid_signature email=${normalizedEmail} ip=${req.ip}`);
     res.status(401).json({ error: 'Invalid credentials' });
     return;
   }
 
   if (user.status !== 'active') {
+    console.warn(`[auth] login/token failed reason=inactive_account email=${normalizedEmail} ip=${req.ip}`);
     res.status(403).json({ error: 'Account is not active' });
     return;
   }
 
+  console.log(`[auth] login/token success userId=${user.id.slice(0, 8)} email=${normalizedEmail} ip=${req.ip}`);
   const token = jwt.sign({ sub: user.id, email: user.email }, JWT_SECRET, {
     expiresIn: JWT_EXPIRES_IN,
   });

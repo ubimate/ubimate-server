@@ -303,7 +303,13 @@ importers:
       '@ubimate/crypto':
         specifier: workspace:*
         version: link:../../../packages/crypto
+      better-sqlite3:
+        specifier: ^11
+        version: 11.10.0
     devDependencies:
+      '@types/better-sqlite3':
+        specifier: ^7
+        version: 7.6.12
       '@types/node':
         specifier: ^22
         version: 22.15.0
@@ -3613,7 +3619,7 @@ packages:
   /@types/better-sqlite3@7.6.12:
     resolution: {integrity: sha512-fnQmj8lELIj7BSrZQAdBMHEHX8OZLYIHXqAKT1O7tDfLxaINzf00PMjw22r3N/xXh0w/sGHlO6SVaCQ2mj78lg==}
     dependencies:
-      '@types/node': 24.10.1
+      '@types/node': 22.15.0
     dev: true
 
   /@types/body-parser@1.19.6:

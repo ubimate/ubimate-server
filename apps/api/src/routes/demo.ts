@@ -40,7 +40,7 @@ const DATA_DIR = process.env.DATA_DIR ?? path.join(__dirname, '../../data');
 const SESSION_COOKIE = 'nf_session';
 const COOKIE_BASE = {
   httpOnly: true,
-  sameSite: 'strict' as const,
+  sameSite: (process.env.NODE_ENV === 'production' ? 'strict' : 'lax') as 'strict' | 'lax',
   secure: process.env.NODE_ENV === 'production',
   path: '/',
 };
