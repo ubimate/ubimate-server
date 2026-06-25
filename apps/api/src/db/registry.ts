@@ -309,7 +309,7 @@ export const registryStmts = {
     SELECT * FROM workspace_keys WHERE workspace_id = ? AND user_id = ?
   `),
   listWorkspaceKeysForUser: registryDb.prepare(`
-    SELECT * FROM workspace_keys WHERE user_id = ?
+    SELECT * FROM workspace_keys WHERE user_id = ? ORDER BY granted_at ASC
   `),
   deleteWorkspaceKeyForUser: registryDb.prepare(`
     DELETE FROM workspace_keys WHERE workspace_id = ? AND user_id = ?
