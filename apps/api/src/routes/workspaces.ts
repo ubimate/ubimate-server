@@ -3,6 +3,12 @@
  *
  * GET  /api/workspaces/:id/key           → return caller's wrapped workspace key
  * PUT  /api/workspaces/:id/key/:userId   → upsert a wrapped key for a target user (owner/admin)
+ *
+ * Bootstrap rule: if no workspace_keys rows exist at all for a workspace, any
+ * authenticated user may create the first key entry for themselves (self-only).
+ * This lets Tauri clients that created a workspace locally upload their sealed
+ * content key the first time they connect to the cloud, without needing a
+ * pre-existing row to satisfy the normal ownership check.
  */
 import { Router, Request, Response } from 'express';
 import { requireAuth } from '../middleware/auth';
@@ -36,8 +42,14 @@ workspacesRouter.put('/:id/key/:userId', (req: Request, res: Response) => {
   // Verify the caller has access to this workspace.
   const callerKey = registryStmts.getWorkspaceKeyForUser.get(req.params.id, req.userId) as WorkspaceKeyRow | undefined;
   if (!callerKey) {
-    res.status(403).json({ error: 'Not authorised to manage keys for this workspace' });
-    return;
+    // Bootstrap exception: allow self-only key creation when no key rows exist
+    // for this workspace (first-time upload from a locally-created workspace).
+    const isSelf = req.params.userId === req.userId;
+    const { count } = registryStmts.countWorkspaceKeys.get(req.params.id) as { count: number };
+    if (!isSelf || count > 0) {
+      res.status(403).json({ error: 'Not authorised to manage keys for this workspace' });
+      return;
+    }
   }
 
   const { wrapped_key } = req.body as { wrapped_key?: string };

@@ -418,8 +418,10 @@ documentsRouter.post('/sync/structural', (req: Request, res: Response) => {
         // When a new workspace is created via offline-sync replay, persist the
         // caller's sealed copy of its content key (key-per-workspace model) so
         // it can be recovered on re-login and shared with collaborators.
+        // Use upsert so repeated syncs are idempotent (e.g., the op is replayed
+        // after a reconnect or initial sync is re-run).
         if (payload.type === 'workspace' && payload.wrappedWorkspaceKey && typeof payload.wrappedWorkspaceKey === 'string') {
-          registryStmts.insertWorkspaceKey.run({
+          registryStmts.upsertWorkspaceKey.run({
             workspace_id: op.id,
             user_id: req.userId,
             wrapped_key: payload.wrappedWorkspaceKey,

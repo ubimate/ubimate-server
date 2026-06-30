@@ -308,6 +308,9 @@ export const registryStmts = {
   getWorkspaceKeyForUser: registryDb.prepare(`
     SELECT * FROM workspace_keys WHERE workspace_id = ? AND user_id = ?
   `),
+  countWorkspaceKeys: registryDb.prepare(`
+    SELECT COUNT(*) as count FROM workspace_keys WHERE workspace_id = ?
+  `),
   listWorkspaceKeysForUser: registryDb.prepare(`
     SELECT * FROM workspace_keys WHERE user_id = ? ORDER BY granted_at ASC
   `),
