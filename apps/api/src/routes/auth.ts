@@ -49,15 +49,58 @@ interface NonceEntry {
   consumed: boolean;
 }
 
-/** Keyed by normalised email. */
-const nonceStore = new Map<string, NonceEntry>();
+/**
+ * Keyed by normalised email → list of outstanding one-time nonces.
+ *
+ * A list (rather than a single entry) lets the SAME user have several sign-in
+ * attempts in flight at once — e.g. logging in from two devices/tabs
+ * simultaneously, or the concurrent e2e suite authenticating one shared user
+ * from parallel browser contexts.  With a single-entry store the second
+ * /challenge would overwrite the first's nonce, making the first /login fail
+ * with invalid_nonce.
+ */
+const nonceStore = new Map<string, NonceEntry[]>();
 
-/** Remove entries whose TTL has elapsed. Called lazily before every store write. */
+/** Upper bound on concurrently-outstanding nonces per email (memory guard). */
+const MAX_NONCES_PER_EMAIL = 10;
+
+/** Remove expired entries (and empty buckets). Called lazily before every store write. */
 function cleanupNonces(): void {
   const now = Date.now();
-  for (const [email, entry] of nonceStore.entries()) {
-    if (entry.expiresAt < now) nonceStore.delete(email);
+  for (const [email, entries] of nonceStore.entries()) {
+    const live = entries.filter((e) => e.expiresAt >= now);
+    if (live.length === 0) nonceStore.delete(email);
+    else if (live.length !== entries.length) nonceStore.set(email, live);
   }
+}
+
+/**
+ * Record a freshly-issued nonce for an email, pruning expired ones and
+ * bounding the list to the most recent MAX_NONCES_PER_EMAIL entries.
+ */
+function addNonce(email: string, nonce: string, expiresAt: number): void {
+  const now = Date.now();
+  const entries = (nonceStore.get(email) ?? []).filter((e) => e.expiresAt >= now);
+  entries.push({ nonce, expiresAt, consumed: false });
+  if (entries.length > MAX_NONCES_PER_EMAIL) {
+    entries.splice(0, entries.length - MAX_NONCES_PER_EMAIL);
+  }
+  nonceStore.set(email, entries);
+}
+
+/**
+ * Verify and consume a one-time nonce for an email.  Returns true when a
+ * matching, unconsumed, unexpired nonce is found (and marks it consumed to
+ * prevent replay within the TTL window); false otherwise.
+ */
+function consumeNonce(email: string, nonce: string): boolean {
+  const entries = nonceStore.get(email);
+  if (!entries) return false;
+  const now = Date.now();
+  const match = entries.find((e) => e.nonce === nonce && !e.consumed && e.expiresAt >= now);
+  if (!match) return false;
+  match.consumed = true;
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -110,7 +153,7 @@ authRouter.get('/challenge', authLimiter, (req: Request, res: Response) => {
   const normalizedEmail = email.trim().toLowerCase();
   const nonce = randomBytes(32).toString('hex');
   const expiresAt = Date.now() + NONCE_TTL_MS;
-  nonceStore.set(normalizedEmail, { nonce, expiresAt, consumed: false });
+  addNonce(normalizedEmail, nonce, expiresAt);
 
   // has_zk_keys is retained for backward-compatible clients.
   const user = registryStmts.getUserByEmail.get(normalizedEmail) as UserRow | undefined;
@@ -319,13 +362,11 @@ authRouter.post('/login', authLimiter, async (req: Request, res: Response) => {
     return;
   }
 
-  const stored = nonceStore.get(normalizedEmail);
-  if (!stored || stored.consumed || stored.expiresAt < Date.now() || stored.nonce !== clientNonce) {
+  if (!consumeNonce(normalizedEmail, clientNonce)) {
     console.warn(`[auth] login failed reason=invalid_nonce email=${normalizedEmail} ip=${req.ip}`);
     res.status(401).json({ error: 'Invalid or expired nonce' });
     return;
   }
-  stored.consumed = true;
 
   let valid = false;
   try {
@@ -400,13 +441,11 @@ authRouter.post('/login/token', authLimiter, async (req: Request, res: Response)
     return;
   }
 
-  const stored = nonceStore.get(normalizedEmail);
-  if (!stored || stored.consumed || stored.expiresAt < Date.now() || stored.nonce !== clientNonce) {
+  if (!consumeNonce(normalizedEmail, clientNonce)) {
     console.warn(`[auth] login/token failed reason=invalid_nonce email=${normalizedEmail} ip=${req.ip}`);
     res.status(401).json({ error: 'Invalid or expired nonce' });
     return;
   }
-  stored.consumed = true;
 
   let valid = false;
   try {
