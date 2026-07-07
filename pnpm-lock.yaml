@@ -41,9 +41,6 @@ importers:
 
   apps/api:
     dependencies:
-      '@hocuspocus/server':
-        specifier: 2.15.3
-        version: 2.15.3(y-protocols@1.0.7)(yjs@13.6.27)
       '@noble/curves':
         specifier: 2.2.0
         version: 2.2.0
@@ -193,9 +190,6 @@ importers:
       '@emoji-mart/react':
         specifier: 1.1.1
         version: 1.1.1(emoji-mart@5.6.0)(react@19.2.0)
-      '@hocuspocus/provider':
-        specifier: ^3.0.0
-        version: 3.4.4(y-protocols@1.0.7)(yjs@13.6.27)
       '@react-spring/web':
         specifier: 10.1.1
         version: 10.1.1(react-dom@19.2.0)(react@19.2.0)
@@ -263,9 +257,6 @@ importers:
 
   apps/mobile-web/e2e:
     dependencies:
-      '@hocuspocus/provider':
-        specifier: ^3.0.0
-        version: 3.4.4(y-protocols@1.0.7)(yjs@13.6.27)
       '@playwright/test':
         specifier: ^1.49
         version: 1.58.2
@@ -352,9 +343,6 @@ importers:
       '@fontsource-variable/noto-sans':
         specifier: 5.2.10
         version: 5.2.10
-      '@hocuspocus/provider':
-        specifier: 2.15.3
-        version: 2.15.3(y-protocols@1.0.7)(yjs@13.6.27)
       '@tauri-apps/api':
         specifier: 2.10.1
         version: 2.10.1
@@ -1801,71 +1789,6 @@ packages:
     resolution: {integrity: sha512-wyFgKkFu7jki5kEL8qv7avjQ8rxHX0J/nhLWvbR9T0hOH1HRKZEvb9EW9lMjZfWHHfEzKkYf5J+NadwgCS7TXA==}
     dev: false
 
-  /@hocuspocus/common@2.15.3:
-    resolution: {integrity: sha512-Rzh1HF0a2o/tf90A3w2XNdXd9Ym3aQzMDfD3lAUONCX9B9QOdqdyiORrj6M25QEaJrEIbXFy8LtAFcL0wRdWzA==}
-    dependencies:
-      lib0: 0.2.117
-    dev: false
-
-  /@hocuspocus/common@3.4.4:
-    resolution: {integrity: sha512-RykIJ0tsHHMP4Xk+4UCbc7SO5LgGxGUSTdbh6anJEsaALAyqinf1Nn5HYuMjLPolAmsar1v++m9zufR09NLpXA==}
-    dependencies:
-      lib0: 0.2.117
-    dev: false
-
-  /@hocuspocus/provider@2.15.3(y-protocols@1.0.7)(yjs@13.6.27):
-    resolution: {integrity: sha512-oadN05m+KL4ylNKVo5YspNG4MXkT2Y+FUFzrgigpQeTjQibkPUwCNmUnkUxMgrGRgxb+O0lJCfirFIJMxedctA==}
-    peerDependencies:
-      y-protocols: ^1.0.6
-      yjs: ^13.6.8
-    dependencies:
-      '@hocuspocus/common': 2.15.3
-      '@lifeomic/attempt': 3.1.0
-      lib0: 0.2.117
-      ws: 8.20.0
-      y-protocols: 1.0.7(yjs@13.6.27)
-      yjs: 13.6.27
-    transitivePeerDependencies:
-      - bufferutil
-      - utf-8-validate
-    dev: false
-
-  /@hocuspocus/provider@3.4.4(y-protocols@1.0.7)(yjs@13.6.27):
-    resolution: {integrity: sha512-KbsMAfdYcIJD8eMU/5QnpXcSOvIWAcCNI33FSRSaKCIpYBFtAwkYIwWnZJmPZ8a1BMAtqQc+uvy9+UQf7GHnGQ==}
-    peerDependencies:
-      y-protocols: ^1.0.6
-      yjs: ^13.6.8
-    dependencies:
-      '@hocuspocus/common': 3.4.4
-      '@lifeomic/attempt': 3.1.0
-      lib0: 0.2.117
-      ws: 8.20.0
-      y-protocols: 1.0.7(yjs@13.6.27)
-      yjs: 13.6.27
-    transitivePeerDependencies:
-      - bufferutil
-      - utf-8-validate
-    dev: false
-
-  /@hocuspocus/server@2.15.3(y-protocols@1.0.7)(yjs@13.6.27):
-    resolution: {integrity: sha512-Ju4ty4/7JtmvivcP7gKReOLf8KrFwN7Yx/5VhXYh4TRULy4kSo2fsDVUaluPp0neZa6PbVhizJuzlOim73IEbQ==}
-    peerDependencies:
-      y-protocols: ^1.0.6
-      yjs: ^13.6.8
-    dependencies:
-      '@hocuspocus/common': 2.15.3
-      async-lock: 1.4.1
-      kleur: 4.1.5
-      lib0: 0.2.117
-      uuid: 11.1.0
-      ws: 8.20.0
-      y-protocols: 1.0.7(yjs@13.6.27)
-      yjs: 13.6.27
-    transitivePeerDependencies:
-      - bufferutil
-      - utf-8-validate
-    dev: false
-
   /@humanfs/core@0.19.1:
     resolution: {integrity: sha512-5DyQ4+1JEUzejeK1JGICcideyfUbGixgS9jNgex5nqkW+cY7WZhxBigmieN5Qnw9ZosSNVC9KQKyb+GUaGyKUA==}
     engines: {node: '>=18.18.0'}
@@ -1928,10 +1851,6 @@ packages:
 
   /@kurkle/color@0.3.4:
     resolution: {integrity: sha512-M5UknZPHRu3DEDWoipU6sE8PdkZ6Z/S+v4dD+Ke8IaNlpdSQah50lz1KtcFBa2vsdOnwbbnxJwVM4wty6udA5w==}
-    dev: false
-
-  /@lifeomic/attempt@3.1.0:
-    resolution: {integrity: sha512-QZqem4QuAnAyzfz+Gj5/+SLxqwCAw2qmt7732ZXodr6VDWGeYLG6w1i/vYLa55JQM9wRuBKLmXmiZ2P0LtE5rw==}
     dev: false
 
   /@mermaid-js/parser@1.0.1:
@@ -4718,10 +4637,6 @@ packages:
     engines: {node: '>=12'}
     dev: true
 
-  /async-lock@1.4.1:
-    resolution: {integrity: sha512-Az2ZTpuytrtqENulXwO3GGv1Bztugx6TT37NIo7imr/Qo0gsYiGtSdBa2B6fsXhTpVZDNfu1Qn3pk531e3q+nQ==}
-    dev: false
-
   /async-validator@4.2.5:
     resolution: {integrity: sha512-7HhHjtERjqlNbZtqNqy2rckN/SpOOlmDliet+lP7k+eKZEjPk3DgyeU9lIXLdeLz0uBbbVp+9Qdow9wJWgwwfg==}
     dev: false
@@ -6442,11 +6357,6 @@ packages:
 
   /khroma@2.1.0:
     resolution: {integrity: sha512-Ls993zuzfayK269Svk9hzpeGUKob/sIgZzyHYdjQoAdQetRKpOLj+k/QQQ/6Qi0Yz65mlROrfd+Ev+1+7dz9Kw==}
-    dev: false
-
-  /kleur@4.1.5:
-    resolution: {integrity: sha512-o+NO+8WrRiQEE4/7nwRJhN1HWpVmJm511pBHUxPLtp0BUISzlBplORYSmTclCnJvQq2tKu/sgl3xVpkc7ZWuQQ==}
-    engines: {node: '>=6'}
     dev: false
 
   /konva@9.3.18:

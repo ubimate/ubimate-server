@@ -10,7 +10,6 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@hocuspocus/server": "2.15.3",
     "@noble/curves": "2.2.0",
     "@ubimate/types": "workspace:*",
     "@ubimate/utils": "workspace:*",
