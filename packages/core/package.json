@@ -1,0 +1,27 @@
+{
+  "name": "@ubimate/core",
+  "version": "0.19.0",
+  "private": true,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js",
+    "./storage": "./dist/storage/index.js",
+    "./domain": "./dist/domain/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@ubimate/types": "workspace:*",
+    "@ubimate/utils": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "vitest": "^4.0.8"
+  }
+}

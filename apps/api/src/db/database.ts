@@ -1,11 +1,20 @@
 import Database from 'better-sqlite3';
 import type { Statement } from 'better-sqlite3';
+import type { StoragePort } from '@ubimate/core';
+import {
+  SCHEMA_SQL,
+  MIGRATIONS,
+  COMPACT_THRESHOLD as CORE_COMPACT_THRESHOLD,
+  isDuplicateColumnError,
+} from '@ubimate/core';
+import { createSqliteStoragePort } from './sqliteStoragePort';
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-export const COMPACT_THRESHOLD = 100;
+/** Re-exported from @ubimate/core (single source of truth for the policy). */
+export const COMPACT_THRESHOLD = CORE_COMPACT_THRESHOLD;
 const SQLITE_BUSY_TIMEOUT_MS = Number(process.env.SQLITE_BUSY_TIMEOUT_MS ?? 5000);
 
 // ---------------------------------------------------------------------------
@@ -39,6 +48,12 @@ export interface UserStmts {
 export interface UserDbHandle {
   db: Database.Database;
   stmts: UserStmts;
+  /**
+   * The runtime-agnostic {@link StoragePort} (better-sqlite3 implementation).
+   * Non-transactional callers should prefer this; transactional batch paths
+   * still use `db`/`stmts` directly (better-sqlite3 transactions are sync).
+   */
+  storage: StoragePort;
   getYjsUpdates(documentId: string): Buffer[];
   appendYjsUpdate(documentId: string, update: Uint8Array): void;
   compactYjsUpdates(documentId: string, snapshot: Uint8Array, yjsSvHash?: string | null): void;
@@ -51,265 +66,51 @@ export interface UserDbHandle {
 }
 
 // ---------------------------------------------------------------------------
-// Schema SQL
-// ---------------------------------------------------------------------------
-
-const SCHEMA_SQL = `
-  CREATE TABLE IF NOT EXISTS documents (
-    id             TEXT    PRIMARY KEY,
-    parent_id      TEXT    REFERENCES documents(id) ON DELETE CASCADE,
-    type           TEXT    NOT NULL CHECK(type IN ('page', 'folder', 'db-folder', 'workspace', 'image', 'file')),
-    position       TEXT    NOT NULL DEFAULT 'a0',
-    properties     TEXT    NOT NULL DEFAULT '{}',
-    created_at     INTEGER NOT NULL,
-    updated_at     INTEGER NOT NULL,
-    last_struct_ts INTEGER NOT NULL DEFAULT 0
-  );
-
-  CREATE TABLE IF NOT EXISTS yjs_updates (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    document_id TEXT    NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-    data        BLOB    NOT NULL,
-    created_at  INTEGER NOT NULL
-  );
-
-  CREATE TABLE IF NOT EXISTS schema_version (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    version     INTEGER NOT NULL,
-    migrated_at INTEGER NOT NULL
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_documents_parent_id   ON documents(parent_id);
-  CREATE INDEX IF NOT EXISTS idx_documents_type        ON documents(type);
-  CREATE INDEX IF NOT EXISTS idx_yjs_updates_document  ON yjs_updates(document_id);
-`;
-
-// ---------------------------------------------------------------------------
 // Migrations
+//
+// The schema DDL and the migration list live in @ubimate/core (the single,
+// runtime-agnostic source of truth shared with the local backend). This module
+// is the better-sqlite3 executor for those portable definitions.
 // ---------------------------------------------------------------------------
-
-type Migration = { version: number; sql?: string; run?: (db: Database.Database) => void };
-
-/**
- * Incremental migrations keyed by version number.
- * Add new entries to the END only — never renumber existing ones.
- */
-const MIGRATIONS: Migration[] = [
-  {
-    version: 1,
-    sql: `ALTER TABLE documents ADD COLUMN last_struct_ts INTEGER NOT NULL DEFAULT 0`,
-  },
-  {
-    version: 2,
-    run: (db) => {
-      db.pragma('foreign_keys = OFF');
-      db.exec(`
-        CREATE TABLE documents_new (
-          id             TEXT    PRIMARY KEY,
-          parent_id      TEXT    REFERENCES documents_new(id) ON DELETE CASCADE,
-          type           TEXT    NOT NULL CHECK(type IN ('page', 'folder', 'workspace', 'image', 'file')),
-          position       TEXT    NOT NULL DEFAULT 'a0',
-          properties     TEXT    NOT NULL DEFAULT '{}',
-          created_at     INTEGER NOT NULL,
-          updated_at     INTEGER NOT NULL,
-          last_struct_ts INTEGER NOT NULL DEFAULT 0
-        );
-        INSERT INTO documents_new SELECT * FROM documents;
-        DROP TABLE documents;
-        ALTER TABLE documents_new RENAME TO documents;
-        CREATE INDEX IF NOT EXISTS idx_documents_parent_id ON documents(parent_id);
-        CREATE INDEX IF NOT EXISTS idx_documents_type      ON documents(type);
-      `);
-      db.pragma('foreign_keys = ON');
-    },
-  },
-  {
-    // Expand the type CHECK constraint to include the 'file' attachment type.
-    version: 3,
-    run: (db) => {
-      db.pragma('foreign_keys = OFF');
-      db.exec(`
-        CREATE TABLE documents_new (
-          id             TEXT    PRIMARY KEY,
-          parent_id      TEXT    REFERENCES documents_new(id) ON DELETE CASCADE,
-          type           TEXT    NOT NULL CHECK(type IN ('page', 'folder', 'workspace', 'image', 'file')),
-          position       TEXT    NOT NULL DEFAULT 'a0',
-          properties     TEXT    NOT NULL DEFAULT '{}',
-          created_at     INTEGER NOT NULL,
-          updated_at     INTEGER NOT NULL,
-          last_struct_ts INTEGER NOT NULL DEFAULT 0
-        );
-        INSERT INTO documents_new SELECT * FROM documents;
-        DROP TABLE documents;
-        ALTER TABLE documents_new RENAME TO documents;
-        CREATE INDEX IF NOT EXISTS idx_documents_parent_id ON documents(parent_id);
-        CREATE INDEX IF NOT EXISTS idx_documents_type      ON documents(type);
-      `);
-      db.pragma('foreign_keys = ON');
-    },
-  },
-  {
-    // Expand the type CHECK constraint to include the 'db-folder' datatable folder type.
-    version: 4,
-    run: (db) => {
-      db.pragma('foreign_keys = OFF');
-      db.exec(`
-        CREATE TABLE documents_new (
-          id             TEXT    PRIMARY KEY,
-          parent_id      TEXT    REFERENCES documents_new(id) ON DELETE CASCADE,
-          type           TEXT    NOT NULL CHECK(type IN ('page', 'folder', 'db-folder', 'workspace', 'image', 'file')),
-          position       TEXT    NOT NULL DEFAULT 'a0',
-          properties     TEXT    NOT NULL DEFAULT '{}',
-          created_at     INTEGER NOT NULL,
-          updated_at     INTEGER NOT NULL,
-          last_struct_ts INTEGER NOT NULL DEFAULT 0
-        );
-        INSERT INTO documents_new SELECT * FROM documents;
-        DROP TABLE documents;
-        ALTER TABLE documents_new RENAME TO documents;
-        CREATE INDEX IF NOT EXISTS idx_documents_parent_id ON documents(parent_id);
-        CREATE INDEX IF NOT EXISTS idx_documents_type      ON documents(type);
-      `);
-      db.pragma('foreign_keys = ON');
-    },
-  },
-  {
-    // Expand the type CHECK constraint to include 'block-registry' for the
-    // workspace-wide block metadata Yjs document (one per workspace).
-    version: 5,
-    run: (db) => {
-      db.pragma('foreign_keys = OFF');
-      db.exec(`
-        CREATE TABLE documents_new (
-          id             TEXT    PRIMARY KEY,
-          parent_id      TEXT    REFERENCES documents_new(id) ON DELETE CASCADE,
-          type           TEXT    NOT NULL CHECK(type IN ('page', 'folder', 'db-folder', 'workspace', 'image', 'file', 'block-registry')),
-          position       TEXT    NOT NULL DEFAULT 'a0',
-          properties     TEXT    NOT NULL DEFAULT '{}',
-          created_at     INTEGER NOT NULL,
-          updated_at     INTEGER NOT NULL,
-          last_struct_ts INTEGER NOT NULL DEFAULT 0
-        );
-        INSERT INTO documents_new SELECT * FROM documents;
-        DROP TABLE documents;
-        ALTER TABLE documents_new RENAME TO documents;
-        CREATE INDEX IF NOT EXISTS idx_documents_parent_id ON documents(parent_id);
-        CREATE INDEX IF NOT EXISTS idx_documents_type      ON documents(type);
-      `);
-      db.pragma('foreign_keys = ON');
-    },
-  },
-  {
-    // Introduce 'db-page' as a dedicated document type for row-pages (pages
-    // that live inside a db-folder and back a single datatable row).
-    // Migrates all existing 'page' docs whose parent is a 'db-folder' to 'db-page'.
-    version: 6,
-    run: (db) => {
-      db.pragma('foreign_keys = OFF');
-      db.exec(`
-        CREATE TABLE documents_new (
-          id             TEXT    PRIMARY KEY,
-          parent_id      TEXT    REFERENCES documents_new(id) ON DELETE CASCADE,
-          type           TEXT    NOT NULL CHECK(type IN ('page', 'db-page', 'folder', 'db-folder', 'workspace', 'image', 'file', 'block-registry')),
-          position       TEXT    NOT NULL DEFAULT 'a0',
-          properties     TEXT    NOT NULL DEFAULT '{}',
-          created_at     INTEGER NOT NULL,
-          updated_at     INTEGER NOT NULL,
-          last_struct_ts INTEGER NOT NULL DEFAULT 0
-        );
-        INSERT INTO documents_new
-          SELECT
-            id, parent_id,
-            CASE
-              WHEN type = 'page' AND parent_id IN (SELECT id FROM documents WHERE type = 'db-folder')
-              THEN 'db-page'
-              ELSE type
-            END AS type,
-            position, properties, created_at, updated_at, last_struct_ts
-          FROM documents;
-        DROP TABLE documents;
-        ALTER TABLE documents_new RENAME TO documents;
-        CREATE INDEX IF NOT EXISTS idx_documents_parent_id ON documents(parent_id);
-        CREATE INDEX IF NOT EXISTS idx_documents_type      ON documents(type);
-      `);
-      db.pragma('foreign_keys = ON');
-    },
-  },
-  {
-    // Add archival/trash status bitfield columns.
-    version: 7,
-    run: (db) => {
-      for (const sql of [
-        `ALTER TABLE documents ADD COLUMN status           INTEGER NOT NULL DEFAULT 0`,
-        `ALTER TABLE documents ADD COLUMN status_timestamp INTEGER`,
-      ]) {
-        try { db.exec(sql); } catch (err: unknown) {
-          if (err instanceof Error && err.message.includes('duplicate column name')) {
-            /* already present — skip */
-          } else { throw err; }
-        }
-      }
-    },
-  },
-  {
-    // Add last_properties_ts for independent LWW tracking of property changes.
-    // Previously update_properties ops were guarded by last_struct_ts, which
-    // reposition also updates — causing renames to be silently dropped when a
-    // concurrent reposition had advanced last_struct_ts on the other device.
-    version: 8,
-    run: (db) => {
-      try {
-        db.exec(`ALTER TABLE documents ADD COLUMN last_properties_ts INTEGER NOT NULL DEFAULT 0`);
-      } catch (err: unknown) {
-        if (err instanceof Error && err.message.includes('duplicate column name')) {
-          /* already present — skip */
-        } else { throw err; }
-      }
-    },
-  },
-  {
-    // Add yjs_sv_hash — SHA-256 of the Yjs state vector, used to skip unchanged
-    // documents during initial sync (hash match ⇒ identical CRDT state).
-    version: 9,
-    run: (db) => {
-      try {
-        db.exec(`ALTER TABLE documents ADD COLUMN yjs_sv_hash TEXT`);
-      } catch (err: unknown) {
-        if (err instanceof Error && err.message.includes('duplicate column name')) {
-          /* already present — skip */
-        } else { throw err; }
-      }
-    },
-  },
-];
 
 function runMigrations(db: Database.Database): void {
   const currentVersion =
     (db.prepare('SELECT MAX(version) as v FROM schema_version').get() as { v: number | null }).v ?? 0;
 
+  const recordVersion = (version: number) =>
+    db.prepare('INSERT INTO schema_version (version, migrated_at) VALUES (?, ?)').run(
+      version,
+      Date.now(),
+    );
+
   for (const migration of MIGRATIONS) {
     if (migration.version <= currentVersion) continue;
-    if (migration.run) {
-      migration.run(db);
-      db.prepare('INSERT INTO schema_version (version, migrated_at) VALUES (?, ?)').run(
-        migration.version,
-        Date.now(),
-      );
-    } else {
-      db.transaction(() => {
+
+    const execStatements = () => {
+      for (const sql of migration.statements) {
         try {
-          db.exec(migration.sql!);
+          db.exec(sql);
         } catch (err: unknown) {
-          if (err instanceof Error && err.message.includes('duplicate column name')) {
+          if (migration.tolerateDuplicateColumn && isDuplicateColumnError(err)) {
             // column already present — nothing to do
           } else {
             throw err;
           }
         }
-        db.prepare('INSERT INTO schema_version (version, migrated_at) VALUES (?, ?)').run(
-          migration.version,
-          Date.now(),
-        );
+      }
+    };
+
+    if (migration.foreignKeysOff) {
+      // The table-rebuild migrations toggle foreign_keys, which SQLite ignores
+      // inside a transaction — so run them outside one.
+      db.pragma('foreign_keys = OFF');
+      execStatements();
+      db.pragma('foreign_keys = ON');
+      recordVersion(migration.version);
+    } else {
+      db.transaction(() => {
+        execStatements();
+        recordVersion(migration.version);
       })();
     }
   }
@@ -504,5 +305,13 @@ export function initUserDb(dbPath: string): UserDbHandle {
     return null;
   }
 
-  return { db, stmts, getYjsUpdates, appendYjsUpdate, compactYjsUpdates, countYjsUpdates, findWorkspaceId };
+  const storage = createSqliteStoragePort({
+    stmts,
+    getYjsUpdates,
+    appendYjsUpdate,
+    compactYjsUpdates,
+    countYjsUpdates,
+  });
+
+  return { db, stmts, storage, getYjsUpdates, appendYjsUpdate, compactYjsUpdates, countYjsUpdates, findWorkspaceId };
 }

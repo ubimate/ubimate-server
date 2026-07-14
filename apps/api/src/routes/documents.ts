@@ -17,19 +17,11 @@ import { requireAuth } from '../middleware/auth';
 import { registryStmts, resolvePrimaryWorkspaceId } from '../db/registry';
 
 const DATA_DIR = process.env.DATA_DIR ?? path.join(__dirname, '../../data');
-const MAX_NOTE_CHARS = 4_000;
 
 export const documentsRouter = Router();
 
 // All document routes require authentication.
 documentsRouter.use(requireAuth);
-
-function getNoteTitleLength(properties: unknown): number {
-  if (!properties || typeof properties !== 'object') return 0;
-  const title = (properties as Record<string, unknown>).title;
-  if (typeof title !== 'string') return 0;
-  return title.length;
-}
 
 // ---------------------------------------------------------------------------
 // SSE — tree-change notifications (scoped per user)
@@ -94,8 +86,8 @@ function toOut(row: DocumentRow): Document {
 // GET /api/documents
 // Returns ALL documents (tree data — client builds the hierarchy).
 // ---------------------------------------------------------------------------
-documentsRouter.get('/', (_req: Request, res: Response) => {
-  const rows = _req.userDbHandle.stmts.listDocuments.all() as DocumentRow[];
+documentsRouter.get('/', async (_req: Request, res: Response) => {
+  const rows = await _req.userDbHandle.storage.listDocuments();
   res.json(rows.map(toOut));
 });
 
@@ -140,8 +132,8 @@ documentsRouter.get('/tree-events', (req: Request, res: Response) => {
 // ---------------------------------------------------------------------------
 // GET /api/documents/:id
 // ---------------------------------------------------------------------------
-documentsRouter.get('/:id', (req: Request, res: Response) => {
-  const row = req.userDbHandle.stmts.getDocument.get(req.params.id) as DocumentRow | undefined;
+documentsRouter.get('/:id', async (req: Request, res: Response) => {
+  const row = await req.userDbHandle.storage.getDocument(req.params.id);
   if (!row) return res.status(404).json({ error: 'Document not found' });
   res.json(toOut(row));
 });
@@ -160,12 +152,8 @@ documentsRouter.post('/', (req: Request, res: Response) => {
   const position = (req.body as CreateDocumentPayload).position
     ?? generateKeyBetween(lastRow?.position ?? null, null);
 
-  if (!type || !['page', 'db-page', 'folder', 'db-folder', 'workspace', 'image', 'file', 'note', 'block-registry'].includes(type)) {
+  if (!type || !['page', 'db-page', 'folder', 'db-folder', 'workspace', 'image', 'file', 'block-registry'].includes(type)) {
     return res.status(400).json({ error: 'Invalid or missing `type`' });
-  }
-
-  if (type === 'note' && getNoteTitleLength(properties) > MAX_NOTE_CHARS) {
-    return res.status(400).json({ error: `Note is too long (max ${MAX_NOTE_CHARS} characters)` });
   }
 
   const now = Date.now();
@@ -391,10 +379,7 @@ documentsRouter.post('/sync/structural', (req: Request, res: Response) => {
         if (existing) { skipped++; continue; }
 
         const payload = op.payload as CreateDocumentPayload & { status?: number; status_timestamp?: number | null };
-        if (!payload.type || !['page', 'db-page', 'folder', 'db-folder', 'workspace', 'image', 'file', 'note', 'block-registry'].includes(payload.type)) {
-          skipped++; continue;
-        }
-        if (payload.type === 'note' && getNoteTitleLength(payload.properties ?? {}) > MAX_NOTE_CHARS) {
+        if (!payload.type || !['page', 'db-page', 'folder', 'db-folder', 'workspace', 'image', 'file', 'block-registry'].includes(payload.type)) {
           skipped++; continue;
         }
         const lastRow = stmts.lastSiblingPosition.get(payload.parent_id ?? null) as
@@ -675,9 +660,8 @@ documentsRouter.delete('/:id', (req: Request, res: Response) => {
 // content key and merges them locally. Used by the Tauri desktop client during
 // initial / reconnect catch-up sync.
 // ---------------------------------------------------------------------------
-documentsRouter.get('/:id/yjs', (req: Request, res: Response) => {
-  const { getYjsUpdates } = req.userDbHandle;
-  const updates = getYjsUpdates(req.params.id);
+documentsRouter.get('/:id/yjs', async (req: Request, res: Response) => {
+  const updates = await req.userDbHandle.storage.getYjsUpdates(req.params.id);
   // Opaque pass-through: emit the stored blobs verbatim, in order.
   const blobs = updates.map((u) => Buffer.from(u).toString('base64'));
   return res.json({ updates: blobs });
@@ -696,7 +680,7 @@ documentsRouter.get('/:id/yjs', (req: Request, res: Response) => {
 //   - replace: when true, replace ALL stored blobs with this single snapshot
 //              (client-driven compaction); otherwise append.
 // ---------------------------------------------------------------------------
-documentsRouter.post('/:id/yjs', (req: Request, res: Response) => {
+documentsRouter.post('/:id/yjs', async (req: Request, res: Response) => {
   const { update, yjs_sv_hash, replace } = req.body as {
     update?: string;
     yjs_sv_hash?: string;
@@ -713,15 +697,15 @@ documentsRouter.post('/:id/yjs', (req: Request, res: Response) => {
     return res.status(400).json({ error: 'update must be a valid base64 string' });
   }
 
-  const { appendYjsUpdate, compactYjsUpdates } = req.userDbHandle;
+  const { storage } = req.userDbHandle;
 
   if (replace) {
     // Client-driven compaction: replace the stored blobs with one snapshot.
-    compactYjsUpdates(req.params.id, updateBytes, yjs_sv_hash ?? null);
+    await storage.compactYjsUpdates(req.params.id, updateBytes, yjs_sv_hash ?? null);
   } else {
-    appendYjsUpdate(req.params.id, updateBytes);
+    await storage.appendYjsUpdate(req.params.id, updateBytes);
     if (yjs_sv_hash) {
-      req.userDbHandle.stmts.updateYjsSvHash.run({ id: req.params.id, yjs_sv_hash });
+      await storage.updateYjsSvHash(req.params.id, yjs_sv_hash);
     }
   }
 
@@ -738,17 +722,17 @@ documentsRouter.post('/:id/yjs', (req: Request, res: Response) => {
 // Body: { docs: Array<{ id: string; yjs_sv_hash: string | null }> }
 // Response: { changed: Array<{ id: string; yjs_sv_hash: string | null }> }
 // ---------------------------------------------------------------------------
-documentsRouter.post('/sync/yjs-check', (req: Request, res: Response) => {
+documentsRouter.post('/sync/yjs-check', async (req: Request, res: Response) => {
   const { docs } = req.body as { docs?: Array<{ id: string; yjs_sv_hash: string | null }> };
   if (!Array.isArray(docs)) {
     return res.status(400).json({ error: 'docs array is required' });
   }
 
-  const { countYjsUpdates, stmts } = req.userDbHandle;
+  const { storage } = req.userDbHandle;
   const changed: Array<{ id: string; yjs_sv_hash: string | null }> = [];
 
   for (const { id, yjs_sv_hash: clientHash } of docs) {
-    const row = stmts.getDocument.get(id) as DocumentRow | undefined;
+    const row = await storage.getDocument(id);
     const serverHash = row?.yjs_sv_hash ?? null;
 
     // Both sides agree on the (opaque) hash — nothing to sync.
@@ -758,7 +742,7 @@ documentsRouter.post('/sync/yjs-check', (req: Request, res: Response) => {
     // The server cannot compute a hash from ciphertext, so when either side
     // reports content we mark the document changed and let the client
     // reconcile (it holds the key and does the real merge).
-    const serverHasContent = countYjsUpdates(id) > 0;
+    const serverHasContent = (await storage.countYjsUpdates(id)) > 0;
     if (!clientHash && !serverHasContent) continue;
 
     changed.push({ id, yjs_sv_hash: serverHash });

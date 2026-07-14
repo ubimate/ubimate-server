@@ -1,13 +1,13 @@
 {
   "name": "ubimate-server",
-  "version": "0.18.7",
+  "version": "0.19.0",
   "private": true,
   "description": "Ubimate self-hostable server (API + admin panel)",
   "scripts": {
     "dev": "pnpm --parallel -r dev",
     "dev:api": "pnpm --filter api dev",
     "dev:admin": "pnpm --filter admin dev",
-    "build": "pnpm --filter @ubimate/utils build && pnpm --filter admin build && pnpm --filter api build",
+    "build": "pnpm --filter @ubimate/utils build && pnpm --filter @ubimate/core build && pnpm --filter admin build && pnpm --filter api build",
     "test": "pnpm --filter api test",
     "start": "pnpm --filter api start",
     "docker-local:up": "docker compose up --build",

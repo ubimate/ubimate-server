@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@noble/curves": "2.2.0",
+    "@ubimate/core": "workspace:*",
     "@ubimate/types": "workspace:*",
     "@ubimate/utils": "workspace:*",
     "altcha-lib": "2.2.0",

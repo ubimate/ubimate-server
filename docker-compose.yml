@@ -2,7 +2,8 @@ services:
   app:
     build:
       context: .
-      dockerfile: Dockerfile.unified
+      dockerfile: Dockerfile
+      target: unified
       args:
         VITE_API_URL: ${VITE_API_URL:-http://localhost:3001}
         VITE_HOCUSPOCUS_URL: ${VITE_HOCUSPOCUS_URL:-ws://localhost:3001/yjs}

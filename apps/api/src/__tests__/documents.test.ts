@@ -20,7 +20,8 @@ import { initUserDb } from '../db/database';
 import type { UserDbHandle } from '../db/database';
 
 const TEST_USER_ID = 'test-user-docs';
-const MAX_NOTE_CHARS = 4_000;
+// A length that would have exceeded the (now-removed) server-side content cap.
+const LONG_TITLE_LEN = 4_001;
 
 describe('PUT /api/documents/:id — old src file cleanup', () => {
   let tmpDir: string;
@@ -206,21 +207,26 @@ describe('PUT /api/documents/:id — old src file cleanup', () => {
     expect(res.status).toBe(404);
   });
 
-  it('rejects note creation when title exceeds the note length cap', async () => {
-    const tooLong = 'x'.repeat(MAX_NOTE_CHARS + 1);
+  it('stores and returns encrypted `properties` envelopes verbatim (zero-knowledge)', async () => {
+    // The zero-knowledge contract: the server persists the opaque `{ _enc }`
+    // ciphertext envelope byte-for-byte and never inspects or rewrites it.
+    const envelope = { _enc: Buffer.from('cipher-bytes-\u{1F512}').toString('base64') };
     const res = await fetch(`${baseUrl}/api/documents`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: 'note', position: 'a0', properties: { title: tooLong } }),
+      body: JSON.stringify({ type: 'image', position: 'a0', properties: envelope }),
     });
+    expect(res.status).toBe(201);
+    const created = await res.json() as { id: string };
 
-    expect(res.status).toBe(400);
-    const body = await res.json() as { error?: string };
-    expect(body.error).toContain(`max ${MAX_NOTE_CHARS} characters`);
+    const got = await fetch(`${baseUrl}/api/documents/${created.id}`);
+    const body = await got.json() as { properties: Record<string, unknown> };
+    expect(body.properties).toEqual(envelope);
+    expect(Object.keys(body.properties)).toEqual(['_enc']);
   });
 
-  it('skips oversize note create operations in structural sync', async () => {
-    const tooLong = 'x'.repeat(MAX_NOTE_CHARS + 1);
+  it('applies long-property create operations in structural sync (no content cap)', async () => {
+    const longTitle = 'x'.repeat(LONG_TITLE_LEN);
     const noteId = randomUUID();
     const ts = Date.now();
 
@@ -233,7 +239,7 @@ describe('PUT /api/documents/:id — old src file cleanup', () => {
             op: 'create',
             id: noteId,
             client_ts: ts,
-            payload: { type: 'note', parent_id: null, properties: { title: tooLong } },
+            payload: { type: 'page', parent_id: null, properties: { title: longTitle } },
           },
         ],
       }),
@@ -241,9 +247,9 @@ describe('PUT /api/documents/:id — old src file cleanup', () => {
 
     expect(res.status).toBe(200);
     const body = await res.json() as { applied: number; skipped: number; documents: Array<{ id: string }> };
-    expect(body.applied).toBe(0);
-    expect(body.skipped).toBe(1);
-    expect(body.documents.find((d) => d.id === noteId)).toBeUndefined();
+    expect(body.applied).toBe(1);
+    expect(body.skipped).toBe(0);
+    expect(body.documents.find((d) => d.id === noteId)).toBeDefined();
   });
 
   it('persists wrappedWorkspaceKey when a workspace is created via structural sync', async () => {
