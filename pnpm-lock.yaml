@@ -666,6 +666,18 @@ importers:
       '@tiptap/extension-link':
         specifier: 2.27.2
         version: 2.27.2(@tiptap/core@2.27.2)(@tiptap/pm@2.27.2)
+      '@tiptap/extension-table':
+        specifier: 2.27.2
+        version: 2.27.2(@tiptap/core@2.27.2)(@tiptap/pm@2.27.2)
+      '@tiptap/extension-table-cell':
+        specifier: 2.27.2
+        version: 2.27.2(@tiptap/core@2.27.2)
+      '@tiptap/extension-table-header':
+        specifier: 2.27.2
+        version: 2.27.2(@tiptap/core@2.27.2)
+      '@tiptap/extension-table-row':
+        specifier: 2.27.2
+        version: 2.27.2(@tiptap/core@2.27.2)
       '@tiptap/extension-text-style':
         specifier: 2.27.2
         version: 2.27.2(@tiptap/core@2.27.2)
@@ -3592,6 +3604,40 @@ packages:
       '@tiptap/core': 2.27.2(@tiptap/pm@2.27.2)
     dev: false
 
+  /@tiptap/extension-table-cell@2.27.2(@tiptap/core@2.27.2):
+    resolution: {integrity: sha512-9Lk46MjZMFzVZfOj9Kd7VgC6Odt6vmEhlCYVumErShUY7EkFqCw3b2IYoUtQkntfOEx/Afnhff/okNQwPsJeUA==}
+    peerDependencies:
+      '@tiptap/core': ^2.7.0
+    dependencies:
+      '@tiptap/core': 2.27.2(@tiptap/pm@2.27.2)
+    dev: false
+
+  /@tiptap/extension-table-header@2.27.2(@tiptap/core@2.27.2):
+    resolution: {integrity: sha512-ZEb6lbG0NbbodWLV0b4BS/QrDIPlUbCcuOsUxzqVvlMUY1Vg6Fj6fKwLaBcsIUDHi8sxZDBEgYEDw3BR/zcO6A==}
+    peerDependencies:
+      '@tiptap/core': ^2.7.0
+    dependencies:
+      '@tiptap/core': 2.27.2(@tiptap/pm@2.27.2)
+    dev: false
+
+  /@tiptap/extension-table-row@2.27.2(@tiptap/core@2.27.2):
+    resolution: {integrity: sha512-Nw9+tA56Y5HtLVP01NGCZSUuTQhJPtfK9OfmDgGgcxynn2cRVdEtj+9FNZqRhQ1iRVaAI+Rd4xRvX9qYePMOxw==}
+    peerDependencies:
+      '@tiptap/core': ^2.7.0
+    dependencies:
+      '@tiptap/core': 2.27.2(@tiptap/pm@2.27.2)
+    dev: false
+
+  /@tiptap/extension-table@2.27.2(@tiptap/core@2.27.2)(@tiptap/pm@2.27.2):
+    resolution: {integrity: sha512-pDbhOpT5phZkcsyPjGBQlXv0+0hmdrvqHJ+dJjkGcCtlfy2pHiEIhmIItOFagc7wXy8G9iUFZ9Jie4zvDf+brg==}
+    peerDependencies:
+      '@tiptap/core': ^2.7.0
+      '@tiptap/pm': ^2.7.0
+    dependencies:
+      '@tiptap/core': 2.27.2(@tiptap/pm@2.27.2)
+      '@tiptap/pm': 2.27.2
+    dev: false
+
   /@tiptap/extension-text-style@2.27.2(@tiptap/core@2.27.2):
     resolution: {integrity: sha512-Omk+uxjJLyEY69KStpCw5fA9asvV+MGcAX2HOxyISDFoLaL49TMrNjhGAuz09P1L1b0KGXo4ml7Q3v/Lfy4WPA==}
     peerDependencies:
@@ -4484,7 +4530,7 @@ packages:
       '@vitest/spy': 4.1.4
       estree-walker: 3.0.3
       magic-string: 0.30.21
-      vite: 7.3.1(@types/node@22.15.0)(tsx@4.19.3)
+      vite: 7.3.1(@types/node@22.13.14)(tsx@4.19.3)
     dev: true
 
   /@vitest/pretty-format@4.1.4:
