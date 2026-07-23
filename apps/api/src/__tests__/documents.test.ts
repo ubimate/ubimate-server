@@ -368,4 +368,177 @@ describe('PUT /api/documents/:id — old src file cleanup', () => {
     const doc = await res.json() as { status?: number };
     expect((doc.status ?? 0) & 2).toBe(2);
   });
+
+  // ---------------------------------------------------------------------------
+  // Cross-workspace move guard (docs/KEY-PER-WORKSPACE.md §8)
+  // ---------------------------------------------------------------------------
+
+  /** POST /api/documents under a specific parent; returns the created doc id. */
+  async function createChildDoc(
+    type: string,
+    parentId: string | null,
+    properties: Record<string, unknown> = { _enc: 'x' },
+  ): Promise<string> {
+    const res = await fetch(`${baseUrl}/api/documents`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type, parent_id: parentId, position: 'a0', properties }),
+    });
+    expect(res.status).toBe(201);
+    const body = await res.json() as { id: string };
+    return body.id;
+  }
+
+  it('rejects repositioning a page into a different workspace', async () => {
+    const wsA = await createChildDoc('workspace', null);
+    const wsB = await createChildDoc('workspace', null);
+    const pageId = await createChildDoc('page', wsA);
+
+    const res = await fetch(`${baseUrl}/api/documents/${pageId}/reposition`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ parent_id: wsB, before_id: null, client_ts: Date.now() + 10_000 }),
+    });
+    expect(res.status).toBe(409);
+
+    // The page must remain in workspace A.
+    const after = await fetch(`${baseUrl}/api/documents/${pageId}`);
+    const doc = await after.json() as { parent_id: string | null };
+    expect(doc.parent_id).toBe(wsA);
+  });
+
+  it('allows repositioning a page within the same workspace', async () => {
+    const wsA = await createChildDoc('workspace', null);
+    const folderId = await createChildDoc('folder', wsA);
+    const pageId = await createChildDoc('page', wsA);
+
+    const res = await fetch(`${baseUrl}/api/documents/${pageId}/reposition`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ parent_id: folderId, before_id: null, client_ts: Date.now() + 10_000 }),
+    });
+    expect(res.status).toBe(200);
+
+    const after = await fetch(`${baseUrl}/api/documents/${pageId}`);
+    const doc = await after.json() as { parent_id: string | null };
+    expect(doc.parent_id).toBe(folderId);
+  });
+
+  it('skips a cross-workspace reposition op during structural sync', async () => {
+    const wsA = await createChildDoc('workspace', null);
+    const wsB = await createChildDoc('workspace', null);
+    const pageId = await createChildDoc('page', wsA);
+
+    const res = await fetch(`${baseUrl}/api/documents/sync/structural`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ops: [
+          {
+            op: 'reposition',
+            id: pageId,
+            client_ts: Date.now() + 10_000,
+            payload: { parent_id: wsB },
+          },
+        ],
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { applied: number; skipped: number };
+    expect(body.applied).toBe(0);
+    expect(body.skipped).toBe(1);
+
+    const after = await fetch(`${baseUrl}/api/documents/${pageId}`);
+    const doc = await after.json() as { parent_id: string | null };
+    expect(doc.parent_id).toBe(wsA);
+  });
+
+  it('rejects moving a deeply-nested page out of its workspace (walks the ancestor chain)', async () => {
+    // wsA › folder › page  →  attempt to move `page` under wsB.
+    // The source workspace must be resolved by walking parents past the folder,
+    // not read from the page's direct parent.
+    const wsA = await createChildDoc('workspace', null);
+    const wsB = await createChildDoc('workspace', null);
+    const folderId = await createChildDoc('folder', wsA);
+    const pageId = await createChildDoc('page', folderId);
+
+    const res = await fetch(`${baseUrl}/api/documents/${pageId}/reposition`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ parent_id: wsB, before_id: null, client_ts: Date.now() + 10_000 }),
+    });
+    expect(res.status).toBe(409);
+
+    const after = await fetch(`${baseUrl}/api/documents/${pageId}`);
+    const doc = await after.json() as { parent_id: string | null };
+    expect(doc.parent_id).toBe(folderId);
+  });
+
+  it('rejects moving a page into a sub-folder of another workspace', async () => {
+    // Destination is a folder nested inside wsB — the guard must resolve the
+    // destination workspace by walking up from the new parent, not assume the
+    // new parent is itself a workspace.
+    const wsA = await createChildDoc('workspace', null);
+    const wsB = await createChildDoc('workspace', null);
+    const folderInB = await createChildDoc('folder', wsB);
+    const pageId = await createChildDoc('page', wsA);
+
+    const res = await fetch(`${baseUrl}/api/documents/${pageId}/reposition`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ parent_id: folderInB, before_id: null, client_ts: Date.now() + 10_000 }),
+    });
+    expect(res.status).toBe(409);
+
+    const after = await fetch(`${baseUrl}/api/documents/${pageId}`);
+    const doc = await after.json() as { parent_id: string | null };
+    expect(doc.parent_id).toBe(wsA);
+  });
+
+  it('allows reordering a workspace node at the root (guard bypasses workspace-type nodes)', async () => {
+    const wsA = await createChildDoc('workspace', null);
+    const wsB = await createChildDoc('workspace', null);
+
+    // Reposition wsB to the front of the root list (parent stays null). The
+    // cross-workspace guard must not fire for a workspace node itself.
+    const res = await fetch(`${baseUrl}/api/documents/${wsB}/reposition`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ parent_id: null, before_id: wsA, client_ts: Date.now() + 10_000 }),
+    });
+    expect(res.status).toBe(200);
+
+    const after = await fetch(`${baseUrl}/api/documents/${wsB}`);
+    const doc = await after.json() as { parent_id: string | null };
+    expect(doc.parent_id).toBeNull();
+  });
+
+  it('applies a same-workspace reposition op during structural sync', async () => {
+    const wsA = await createChildDoc('workspace', null);
+    const folderId = await createChildDoc('folder', wsA);
+    const pageId = await createChildDoc('page', wsA);
+
+    const res = await fetch(`${baseUrl}/api/documents/sync/structural`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ops: [
+          {
+            op: 'reposition',
+            id: pageId,
+            client_ts: Date.now() + 10_000,
+            payload: { parent_id: folderId },
+          },
+        ],
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { applied: number; skipped: number };
+    expect(body.applied).toBe(1);
+    expect(body.skipped).toBe(0);
+
+    const after = await fetch(`${baseUrl}/api/documents/${pageId}`);
+    const doc = await after.json() as { parent_id: string | null };
+    expect(doc.parent_id).toBe(folderId);
+  });
 });

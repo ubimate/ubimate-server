@@ -262,6 +262,22 @@ documentsRouter.patch('/:id/reposition', (req: Request, res: Response) => {
     return res.json(toOut(existing));
   }
 
+  // Reject cross-workspace moves. Relocating a document into another workspace
+  // requires re-keying its encrypted properties and Yjs history to the
+  // destination workspace key (see docs/KEY-PER-WORKSPACE.md §8), which is not
+  // yet implemented — tracked as a roadmap feature. Repositioning a workspace
+  // node itself (reordering among top-level workspaces) is unaffected.
+  if (existing.type !== 'workspace') {
+    const { findWorkspaceId } = req.userDbHandle;
+    const sourceWorkspaceId = findWorkspaceId(existing.id);
+    const destWorkspaceId = parent_id ? findWorkspaceId(parent_id) : null;
+    if (sourceWorkspaceId !== destWorkspaceId) {
+      return res
+        .status(409)
+        .json({ error: 'Moving items between workspaces is not supported' });
+    }
+  }
+
   let position: string;
 
   if (before_id === null) {
@@ -441,6 +457,15 @@ documentsRouter.post('/sync/structural', (req: Request, res: Response) => {
 
         const { parent_id = null, before_id = null, position: directPosition } =
           op.payload as RepositionDocumentPayload;
+
+        // Reject cross-workspace moves (see the PATCH /:id/reposition handler and
+        // docs/KEY-PER-WORKSPACE.md §8). Skip the op rather than fail the batch so
+        // the remaining structural ops still replay.
+        if (existing.type !== 'workspace') {
+          const sourceWorkspaceId = req.userDbHandle.findWorkspaceId(existing.id);
+          const destWorkspaceId = parent_id ? req.userDbHandle.findWorkspaceId(parent_id) : null;
+          if (sourceWorkspaceId !== destWorkspaceId) { skipped++; continue; }
+        }
 
         let position: string;
         // If the sync layer supplied the exact fractional-index position string,
