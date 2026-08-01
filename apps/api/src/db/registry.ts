@@ -347,7 +347,19 @@ export const registryStmts = {
   deleteCredentialResetTokensForUser: registryDb.prepare(`
     DELETE FROM credential_reset_tokens WHERE user_id = ?
   `),
+
+  // Health probe — see pingRegistryDb().
+  ping: registryDb.prepare(`SELECT 1 AS ok`),
 } as const;
+
+/**
+ * Cheapest possible proof that the registry DB is still usable. Throws if the
+ * file has become unreadable or stays locked past busy_timeout. Used by the
+ * readiness probe (see routes/health.ts).
+ */
+export function pingRegistryDb(): void {
+  registryStmts.ping.get();
+}
 
 export interface CredentialResetTokenRow {
   id: string;

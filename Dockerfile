@@ -79,6 +79,12 @@ RUN pnpm prune --prod
 
 ENV NODE_ENV=production
 EXPOSE 3001
+
+# Swarm (and therefore CapRover) only restarts a task when its process exits.
+# Without this, a wedged-but-alive process keeps serving traffic forever.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
+  CMD wget -qO- "http://127.0.0.1:${API_PORT:-3001}/api/health" || exit 1
+
 CMD ["node", "apps/api/dist/index.js"]
 
 # ============================================================================
