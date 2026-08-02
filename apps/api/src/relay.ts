@@ -28,26 +28,33 @@
  *     0x02 UPDATE  : [encrypted blob]      append + broadcast
  *     0x03 AWARE   : [encrypted blob]      broadcast only (not stored)
  *     0x04 COMPACT : [encrypted blob]      replace user's stored blobs w/ snapshot
+ *     0x06 PING    : (no payload)          liveness probe, answered with PONG
  *
  *   Server -> Client
  *     0x02 UPDATE  : [encrypted blob]
  *     0x03 AWARE   : [encrypted blob]
  *     0x05 SYNCED  : (no payload) sent once after the initial replay completes
+ *     0x07 PONG    : (no payload) answer to PING
  * ---------------------------------------------------------------------------
  */
 import type { WebSocket } from 'ws';
 import type { IncomingMessage } from 'http';
 import jwt from 'jsonwebtoken';
+import { RELAY_FRAME } from '@ubimate/types';
 import { getUserDb } from './db/userDb';
 import { registryStmts } from './db/registry';
 import { JWT_SECRET } from './middleware/auth';
 
-// Frame type bytes.
-const FRAME_HELLO = 0x01;
-const FRAME_UPDATE = 0x02;
-const FRAME_AWARE = 0x03;
-const FRAME_COMPACT = 0x04;
-const FRAME_SYNCED = 0x05;
+// Frame type bytes — shared with the client provider so the two cannot drift.
+const {
+  HELLO: FRAME_HELLO,
+  UPDATE: FRAME_UPDATE,
+  AWARE: FRAME_AWARE,
+  COMPACT: FRAME_COMPACT,
+  SYNCED: FRAME_SYNCED,
+  PING: FRAME_PING,
+  PONG: FRAME_PONG,
+} = RELAY_FRAME;
 
 interface RelaySocket {
   ws: WebSocket;
@@ -199,6 +206,12 @@ export const relay = {
         }
         case FRAME_AWARE: {
           broadcast(member, frame(FRAME_AWARE, payload));
+          break;
+        }
+        case FRAME_PING: {
+          // Application-level keepalive: a client that stops seeing PONGs
+          // treats the socket as half-open and reconnects.
+          if (ws.readyState === ws.OPEN) ws.send(frame(FRAME_PONG));
           break;
         }
         case FRAME_COMPACT: {

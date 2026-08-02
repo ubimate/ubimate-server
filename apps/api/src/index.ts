@@ -187,6 +187,26 @@ const server = createServer(app);
 // Client connects to: ws(s)://host:port/yjs/<documentName>
 const wss = new WebSocketServer({ noServer: true });
 
+// Protocol-level keepalive. A client that vanishes without a close frame (lost
+// network, killed process) would otherwise sit in its room forever, holding a
+// socket and receiving broadcasts nobody reads. Ping every interval and drop
+// sockets that missed the previous round; browsers answer pings in the
+// WebSocket layer, so this needs no client-side code.
+const WS_PING_INTERVAL_MS = 30_000;
+const wsAlive = new WeakSet<import('ws').WebSocket>();
+
+const wsPingTimer = setInterval(() => {
+  for (const ws of wss.clients) {
+    if (!wsAlive.has(ws)) {
+      ws.terminate();
+      continue;
+    }
+    wsAlive.delete(ws);
+    ws.ping();
+  }
+}, WS_PING_INTERVAL_MS);
+wsPingTimer.unref();
+
 server.on('upgrade', (request, socket, head) => {
   const origin = request.headers.origin ?? 'unknown-origin';
   const userAgent = request.headers['user-agent'] ?? 'unknown-ua';
@@ -194,6 +214,8 @@ server.on('upgrade', (request, socket, head) => {
 
   if (request.url?.startsWith('/yjs')) {
     wss.handleUpgrade(request, socket, head, (ws) => {
+      wsAlive.add(ws);
+      ws.on('pong', () => wsAlive.add(ws));
       // Surface WS-level failures with request metadata so malformed clients
       // are easier to identify from logs.
       ws.on('error', (err) => {
