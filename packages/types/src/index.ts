@@ -9,6 +9,20 @@ export type DocumentType = 'page' | 'db-page' | 'folder' | 'db-folder' | 'worksp
  * A document as returned by the REST API (properties already parsed from JSON).
  * This is the canonical shape shared between the server and all clients.
  */
+/**
+ * Bits of `Document.status`.
+ *
+ * A bitfield rather than an enum because a document can be both archived and
+ * trashed, and because `deleted` is a tombstone that must survive alongside the
+ * other bits for sync last-write-wins.
+ */
+export const DOC_STATUS = {
+  ARCHIVED: 0x1,
+  TRASHED: 0x2,
+  /** Tombstone — permanently deleted; the row is kept for sync LWW. */
+  DELETED: 0x4,
+} as const;
+
 export interface Document {
   id: string;
   parent_id: string | null;

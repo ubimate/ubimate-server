@@ -370,6 +370,12 @@ importers:
       '@tauri-apps/plugin-opener':
         specifier: 2.5.3
         version: 2.5.3
+      '@tauri-apps/plugin-process':
+        specifier: '2'
+        version: 2.3.1
+      '@tauri-apps/plugin-updater':
+        specifier: '2'
+        version: 2.11.0
       '@tiptap/core':
         specifier: 2.27.2
         version: 2.27.2(@tiptap/pm@2.27.2)
@@ -3178,6 +3184,10 @@ packages:
     resolution: {integrity: sha512-hKL/jWf293UDSUN09rR69hrToyIXBb8CjGaWC7gfinvnQrBVvnLr08FeFi38gxtugAVyVcTa5/FD/Xnkb1siBw==}
     dev: false
 
+  /@tauri-apps/api@2.11.1:
+    resolution: {integrity: sha512-M2FPuYND2m+wh5hfW9ZpSdxMPdEJovPBWwoHJmwUpysTYNHaOkVFN419m/K0LIgjb/7KU2vBgsUepJWugQCvAA==}
+    dev: false
+
   /@tauri-apps/cli-darwin-arm64@2.10.1:
     resolution: {integrity: sha512-Z2OjCXiZ+fbYZy7PmP3WRnOpM9+Fy+oonKDEmUE6MwN4IGaYqgceTjwHucc/kEEYZos5GICve35f7ZiizgqEnQ==}
     engines: {node: '>= 10'}
@@ -3305,6 +3315,18 @@ packages:
     resolution: {integrity: sha512-CCcUltXMOfUEArbf3db3kCE7Ggy1ExBEBl51Ko2ODJ6GDYHRp1nSNlQm5uNCFY5k7/ufaK5Ib3Du/Zir19IYQQ==}
     dependencies:
       '@tauri-apps/api': 2.10.1
+    dev: false
+
+  /@tauri-apps/plugin-process@2.3.1:
+    resolution: {integrity: sha512-nCa4fGVaDL/B9ai03VyPOjfAHRHSBz5v6F/ObsB73r/dA3MHHhZtldaDMIc0V/pnUw9ehzr2iEG+XkSEyC0JJA==}
+    dependencies:
+      '@tauri-apps/api': 2.10.1
+    dev: false
+
+  /@tauri-apps/plugin-updater@2.11.0:
+    resolution: {integrity: sha512-AE36XkOoSna24G40jZMY15nzAnkXEPL/73tGoseGrtGOHuI/cZwWzHpZFLjKXDPgzYZ435z1gHu28LgrsBwIxQ==}
+    dependencies:
+      '@tauri-apps/api': 2.11.1
     dev: false
 
   /@testing-library/dom@10.4.1:
