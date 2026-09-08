@@ -15,6 +15,7 @@ import type {
 import { generateKeyBetween } from '@ubimate/utils';
 import { requireAuth } from '../middleware/auth';
 import { registryStmts, resolvePrimaryWorkspaceId } from '../db/registry';
+import { relay } from '../relay';
 
 const DATA_DIR = process.env.DATA_DIR ?? path.join(__dirname, '../../data');
 
@@ -733,6 +734,11 @@ documentsRouter.post('/:id/yjs', async (req: Request, res: Response) => {
       await storage.updateYjsSvHash(req.params.id, yjs_sv_hash);
     }
   }
+  // Live peers of the document hear about it the same way they would about a
+  // socket UPDATE. A replacing snapshot may carry ops nobody has relayed yet
+  // (the reconnect sync compacts when the blob list has grown), so it is fanned
+  // out too — a duplicate op is harmless to a Yjs doc.
+  relay.broadcastStored(req.params.id, new Uint8Array(updateBytes));
 
   return res.status(204).end();
 });
@@ -815,6 +821,7 @@ documentsRouter.post('/sync/yjs-push', (req: Request, res: Response) => {
         req.userDbHandle.stmts.updateYjsSvHash.run({ id, yjs_sv_hash });
       }
     }
+    relay.broadcastStored(id, new Uint8Array(updateBytes));
   }
 
   return res.status(204).end();

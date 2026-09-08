@@ -173,6 +173,50 @@ describe('yjs relay', () => {
     b.ws.close();
   });
 
+  it('fans a blob stored through the REST path out to every client of the document', async () => {
+    const a = await connectAndSync();
+    const b = await connectAndSync();
+    const other = new WebSocket(wsUrl);
+    other.binaryType = 'arraybuffer';
+    await new Promise<void>((resolve, reject) => {
+      other.on('error', reject);
+      other.on('open', () => other.send(helloFrame(token, 'some-other-doc')));
+      other.on('message', (data: ArrayBuffer | Buffer) => {
+        const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array(data);
+        if (bytes[0] === FRAME_SYNCED) resolve();
+      });
+    });
+
+    const collect = (ws: WebSocket) => {
+      const got: Uint8Array[] = [];
+      ws.on('message', (data: ArrayBuffer | Buffer) => {
+        const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array(data);
+        if (bytes[0] === FRAME_UPDATE) got.push(bytes.subarray(1));
+      });
+      return got;
+    };
+    const gotA = collect(a.ws);
+    const gotB = collect(b.ws);
+    const gotOther = collect(other);
+
+    // What the reconnect sync does after storing a blob over HTTP.
+    const { relay } = await import('../relay');
+    const blob = new Uint8Array([4, 5, 6]);
+    relay.broadcastStored(DOC_NAME, blob);
+    relay.broadcastStored('nobody-listens', new Uint8Array([1]));
+
+    await new Promise((r) => setTimeout(r, 100));
+    // Both subscribers of the document — there is no sender to skip.
+    expect(gotA.map((u) => Array.from(u))).toEqual([Array.from(blob)]);
+    expect(gotB.map((u) => Array.from(u))).toEqual([Array.from(blob)]);
+    // Other documents are untouched.
+    expect(gotOther).toHaveLength(0);
+
+    a.ws.close();
+    b.ws.close();
+    other.close();
+  });
+
   it('COMPACT replaces the stored blobs with the snapshot', async () => {
     const first = await connectAndSync();
     first.ws.send(frame(FRAME_UPDATE, new Uint8Array([1])));

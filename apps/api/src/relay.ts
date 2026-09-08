@@ -15,7 +15,8 @@
  *   - replay the user's stored encrypted blobs for a document on subscribe,
  *   - persist incoming encrypted blobs (append; client-driven compaction),
  *   - fan out incoming blobs to every other connected client of the same
- *     document so real-time collaboration keeps working.
+ *     document so real-time collaboration keeps working — including blobs
+ *     that reach storage through the REST sync endpoints (see broadcastStored).
  *
  * Persistence mirrors the previous per-user model exactly: each user's blobs
  * live in their own SQLite database (getUserDb). The server cannot read them.
@@ -87,10 +88,14 @@ function leaveRoom(member: RelaySocket): void {
 
 /** Broadcast a framed message to every room member except the sender. */
 function broadcast(sender: RelaySocket, frame: Uint8Array): void {
-  const set = rooms.get(sender.documentName);
+  broadcastTo(sender.documentName, frame, sender);
+}
+
+function broadcastTo(documentName: string, frame: Uint8Array, except: RelaySocket | null): void {
+  const set = rooms.get(documentName);
   if (!set) return;
   for (const member of set) {
-    if (member === sender) continue;
+    if (member === except) continue;
     if (member.ws.readyState === member.ws.OPEN) {
       member.ws.send(frame);
     }
@@ -142,6 +147,22 @@ function parseHello(payload: Uint8Array): { token: string; documentName: string 
 }
 
 export const relay = {
+  /**
+   * Fan a blob that reached storage through the REST API out to the live
+   * clients of the document, exactly as if it had arrived as an UPDATE frame.
+   *
+   * The Tauri app pushes what it edited while sync was off through
+   * POST /api/documents/:id/yjs at sign-in, not through the socket; without
+   * this, a peer that stayed connected never sees those ops, and every later
+   * live edit that builds on them stalls in its pending queue until it reloads.
+   * The pusher's own socket, if it is subscribed, receives the blob too —
+   * applying an update a doc already holds is a no-op in Yjs.
+   */
+  broadcastStored(documentName: string, blob: Uint8Array): void {
+    if (blob.length === 0) return;
+    broadcastTo(documentName, frame(FRAME_UPDATE, blob), null);
+  },
+
   /**
    * Handle a freshly upgraded WebSocket. Mirrors hocuspocus.handleConnection's
    * call signature so index.ts can swap it in directly.
