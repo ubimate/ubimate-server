@@ -108,6 +108,20 @@ describe('PUT /api/documents/:id — old src file cleanup', () => {
   // Tests
   // ---------------------------------------------------------------------------
 
+  it('POST /:id/yjs tells the user\'s other devices that the content changed', async () => {
+    const id = await createDoc('page', { title: 'Synced' });
+    const { addDocumentEventClient } = await import('../lib/documentEvents');
+    const written: string[] = [];
+    addDocumentEventClient(TEST_USER_ID, { write: (chunk: string) => { written.push(chunk); return true; } } as never);
+    const res = await fetch(`${baseUrl}/api/documents/${id}/yjs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ update: Buffer.from([1, 2, 3]).toString('base64') }),
+    });
+    expect(res.status).toBe(204);
+    expect(written).toEqual([`event: content-changed\ndata: {"ids":["${id}"]}\n\n`]);
+  });
+
   it('deletes the old file when src changes on an image document', async () => {
     const { filePath: oldFile, src: oldSrc } = seedUploadFile();
     const docId = await createDoc('image', { src: oldSrc });
@@ -252,6 +266,22 @@ describe('PUT /api/documents/:id — old src file cleanup', () => {
     expect(body.documents.find((d) => d.id === noteId)).toBeDefined();
   });
 
+  it('reports each last-write-wins clock, which a rename moves apart from updated_at', async () => {
+    // Clients compare these, not `updated_at`, to tell which side renamed or moved a document last.
+    const id = randomUUID();
+    const sync = (ops: unknown[]) => fetch(`${baseUrl}/api/documents/sync/structural`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ops }),
+    });
+    await sync([{ op: 'create', id, client_ts: 1_000, payload: { type: 'page', parent_id: null, properties: { title: 'a' } } }]);
+    await sync([{ op: 'update_properties', id, client_ts: 2_000, payload: { properties: { title: 'b' } } }]);
+
+    const docs = await (await fetch(`${baseUrl}/api/documents`)).json() as Array<Record<string, unknown>>;
+    const doc = docs.find((d) => d.id === id)!;
+    expect([doc.last_struct_ts, doc.last_properties_ts]).toEqual([1_000, 2_000]);
+  });
+
   it('persists wrappedWorkspaceKey when a workspace is created via structural sync', async () => {
     const workspaceId = randomUUID();
     const ts = Date.now();
@@ -319,7 +349,7 @@ describe('PUT /api/documents/:id — old src file cleanup', () => {
     const res = await fetch(`${baseUrl}/api/documents/${wsId}/trash`, { method: 'PATCH' });
     expect(res.status).toBe(403);
     const body = await res.json() as { error?: string };
-    expect(body.error).toContain('home workspace');
+    expect(body.error).toContain('home space');
 
     // The workspace must still be active (status unchanged).
     const after = await fetch(`${baseUrl}/api/documents/${wsId}`);

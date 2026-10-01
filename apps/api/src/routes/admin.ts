@@ -169,7 +169,11 @@ adminRouter.get('/users', (_req: Request, res: Response) => {
 adminRouter.delete('/users/:id', (req: Request, res: Response) => {
   const { id } = req.params;
 
-  const row = registryStmts.listUsers.all().find((u: any) => u.id === id);
+  // `listUsers.all()` is untyped; these are the two columns the code below reads,
+  // and `user_type` is non-optional because `getUserType` requires it.
+  const row = (registryStmts.listUsers.all() as { id: string; user_type: string }[]).find(
+    (u) => u.id === id
+  );
   if (!row) {
     res.status(404).json({ error: 'User not found' });
     return;
@@ -184,7 +188,7 @@ adminRouter.delete('/users/:id', (req: Request, res: Response) => {
   fs.writeFileSync(tombstonePath, JSON.stringify(tombstone, null, 2));
 
   registryStmts.deleteUser.run(id);
-  trackEvent('user-deleted', { type: getUserType(row as any) });
+  trackEvent('user-deleted', { type: getUserType(row) });
 
   res.status(204).send();
 });

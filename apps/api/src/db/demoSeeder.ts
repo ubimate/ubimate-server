@@ -72,8 +72,6 @@ function makeDoc(overrides: Partial<DocRow> & Pick<DocRow, 'id' | 'parent_id' | 
  *       └── db-page  "Set up CI pipeline"
  */
 export function seedDemoWorkspace(db: UserDbHandle, workspaceId: string): void {
-  const now = Date.now();
-
   // ── positions ──────────────────────────────────────────────────────────────
   const wPos   = generateKeyBetween(null, null);
   const p1     = generateKeyBetween(null, null);      // welcome (first child)
@@ -99,7 +97,7 @@ export function seedDemoWorkspace(db: UserDbHandle, workspaceId: string): void {
   const docs: DocRow[] = [
     makeDoc({
       id: workspaceId, parent_id: null, type: 'workspace', position: wPos,
-      properties: JSON.stringify({ title: 'My Workspace' }),
+      properties: JSON.stringify({ title: 'My Space' }),
     }),
     makeDoc({
       id: welcomeId, parent_id: workspaceId, type: 'page', position: p1,

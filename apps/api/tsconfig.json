@@ -7,6 +7,15 @@
     "outDir": "./dist",
     "rootDir": "./src",
     "strict": true,
+    /**
+     * Dead code is a type error, as it already is in `apps/web`. See
+     * `packages/notion-import/tsconfig.json` for how the gap was found: an unused import survived a
+     * package's own `pnpm typecheck` and was caught only because `apps/web` compiles that package
+     * from source. Every package was probed afterwards and four more missed it; none had a
+     * violation, so the flags cost nothing and close the hole.
+     */
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,

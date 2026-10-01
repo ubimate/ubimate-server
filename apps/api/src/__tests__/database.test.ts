@@ -5,7 +5,6 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import * as Y from 'yjs';
 import { initUserDb } from '../db/database';
 import type { UserDbHandle } from '../db/database';
 

@@ -25,7 +25,7 @@ workspacesRouter.use(requireAuth);
 workspacesRouter.get('/:id/key', (req: Request, res: Response) => {
   const row = registryStmts.getWorkspaceKeyForUser.get(req.params.id, req.userId) as WorkspaceKeyRow | undefined;
   if (!row) {
-    res.status(403).json({ error: 'No key for this workspace' });
+    res.status(403).json({ error: 'No key for this space' });
     return;
   }
   res.json({ workspace_id: row.workspace_id, wrapped_key: row.wrapped_key });
@@ -47,7 +47,7 @@ workspacesRouter.put('/:id/key/:userId', (req: Request, res: Response) => {
     const isSelf = req.params.userId === req.userId;
     const { count } = registryStmts.countWorkspaceKeys.get(req.params.id) as { count: number };
     if (!isSelf || count > 0) {
-      res.status(403).json({ error: 'Not authorised to manage keys for this workspace' });
+      res.status(403).json({ error: 'Not authorised to manage keys for this space' });
       return;
     }
   }

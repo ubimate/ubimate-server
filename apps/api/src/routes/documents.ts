@@ -8,7 +8,6 @@ import type {
   CreateDocumentPayload,
   UpdateDocumentPayload,
   RepositionDocumentPayload,
-  StructOp,
   SyncStructuralPayload,
   SyncStructuralResult,
 } from '@ubimate/types';
@@ -16,6 +15,7 @@ import { generateKeyBetween } from '@ubimate/utils';
 import { requireAuth } from '../middleware/auth';
 import { registryStmts, resolvePrimaryWorkspaceId } from '../db/registry';
 import { relay } from '../relay';
+import { addDocumentEventClient, broadcastContentChanged, broadcastTreeChanged } from '../lib/documentEvents';
 
 const DATA_DIR = process.env.DATA_DIR ?? path.join(__dirname, '../../data');
 
@@ -28,23 +28,8 @@ documentsRouter.use(requireAuth);
 // SSE — tree-change notifications (scoped per user)
 // ---------------------------------------------------------------------------
 
-/** SSE streams keyed by userId. */
-const sseClients = new Map<string, Set<Response>>();
-
-/**
- * Broadcast a tree-changed event to every SSE client belonging to `userId`.
- */
-export function broadcastTreeChanged(userId: string): void {
-  const clients = sseClients.get(userId);
-  if (!clients) return;
-  for (const client of clients) {
-    try {
-      client.write('event: tree-changed\ndata: {}\n\n');
-    } catch {
-      // Socket already closed; the 'close' handler will clean it up.
-    }
-  }
-}
+// The registry and the broadcasts live in lib/documentEvents.ts, which the relay uses too.
+export { broadcastTreeChanged } from '../lib/documentEvents';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -77,6 +62,9 @@ function toOut(row: DocumentRow): Document {
     properties: JSON.parse(row.properties),
     created_at: row.created_at,
     updated_at: row.updated_at,
+    // The sync's last-write-wins clocks; `updated_at` alone cannot say which side renamed or moved last.
+    last_struct_ts: row.last_struct_ts,
+    last_properties_ts: row.last_properties_ts,
     status: row.status ?? 0,
     status_timestamp: row.status_timestamp ?? null,
     yjs_sv_hash: row.yjs_sv_hash ?? null,
@@ -94,8 +82,9 @@ documentsRouter.get('/', async (_req: Request, res: Response) => {
 
 // ---------------------------------------------------------------------------
 // GET /api/documents/tree-events
-// Server-Sent Events stream: emits a "tree-changed" event whenever the
-// document tree is mutated.
+// Server-Sent Events stream: "tree-changed" whenever the document tree is
+// mutated, and "content-changed" (throttled, with the ids) whenever a
+// document's content is stored — see lib/documentEvents.ts.
 // ---------------------------------------------------------------------------
 documentsRouter.get('/tree-events', (req: Request, res: Response) => {
   // Disable the server-side socket timeout — SSE connections are intentionally
@@ -112,9 +101,7 @@ documentsRouter.get('/tree-events', (req: Request, res: Response) => {
   // confirms the stream is alive and doesn't report ERR_INCOMPLETE_CHUNKED_ENCODING.
   res.write(': connected\n\n');
 
-  const userId = req.userId;
-  if (!sseClients.has(userId)) sseClients.set(userId, new Set());
-  sseClients.get(userId)!.add(res);
+  const removeClient = addDocumentEventClient(req.userId, res);
 
   const keepalive = setInterval(() => {
     try { res.write(': keepalive\n\n'); } catch { /* socket gone */ }
@@ -122,11 +109,7 @@ documentsRouter.get('/tree-events', (req: Request, res: Response) => {
 
   req.on('close', () => {
     clearInterval(keepalive);
-    const set = sseClients.get(userId);
-    if (set) {
-      set.delete(res);
-      if (set.size === 0) sseClients.delete(userId);
-    }
+    removeClient();
   });
 });
 
@@ -275,7 +258,7 @@ documentsRouter.patch('/:id/reposition', (req: Request, res: Response) => {
     if (sourceWorkspaceId !== destWorkspaceId) {
       return res
         .status(409)
-        .json({ error: 'Moving items between workspaces is not supported' });
+        .json({ error: 'Moving items between spaces is not supported' });
     }
   }
 
@@ -560,7 +543,7 @@ documentsRouter.patch('/:id/trash', (req: Request, res: Response) => {
   const existing = stmts.getDocument.get(req.params.id) as DocumentRow | undefined;
   if (!existing) return res.status(404).json({ error: 'Document not found' });
   if (req.params.id === resolvePrimaryWorkspaceId(req.userId)) {
-    return res.status(403).json({ error: 'The home workspace cannot be deleted.' });
+    return res.status(403).json({ error: 'The home space cannot be deleted.' });
   }
   const now = Date.now();
   db.prepare(`
@@ -635,7 +618,7 @@ documentsRouter.delete('/:id', (req: Request, res: Response) => {
   const existing = stmts.getDocument.get(req.params.id) as DocumentRow | undefined;
   if (!existing) return res.status(404).json({ error: 'Document not found' });
   if (req.params.id === resolvePrimaryWorkspaceId(req.userId)) {
-    return res.status(403).json({ error: 'The home workspace cannot be deleted.' });
+    return res.status(403).json({ error: 'The home space cannot be deleted.' });
   }
 
   const userUploadsDir = path.join(DATA_DIR, 'uploads', req.userId);
@@ -697,8 +680,8 @@ documentsRouter.get('/:id/yjs', async (req: Request, res: Response) => {
 // POST /api/documents/:id/yjs
 // Accepts a single opaque (encrypted) Yjs blob and stores it. The server never
 // decodes the bytes, so it cannot merge updates or compute a state vector —
-// compaction is client-driven via `replace`, and the state-vector hash is
-// supplied by the client and stored verbatim.
+// compaction is client-driven via `replace`, and the state hash (of the Yjs
+// snapshot, SYNC-INCREMENTAL.md §2) is supplied by the client and stored verbatim.
 //
 // Body: { update: string; yjs_sv_hash?: string; replace?: boolean }
 //   - update: base64-encoded opaque (encrypted) Yjs blob
@@ -739,6 +722,8 @@ documentsRouter.post('/:id/yjs', async (req: Request, res: Response) => {
   // (the reconnect sync compacts when the blob list has grown), so it is fanned
   // out too — a duplicate op is harmless to a Yjs doc.
   relay.broadcastStored(req.params.id, new Uint8Array(updateBytes));
+  // Devices without the page open hear of it too, so they can pull it.
+  broadcastContentChanged(req.userId, req.params.id);
 
   return res.status(204).end();
 });

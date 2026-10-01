@@ -152,6 +152,16 @@ describe('yjs relay', () => {
     ws.close();
   });
 
+  it('tells the user\'s devices without the document open that its content changed', async () => {
+    const { addDocumentEventClient } = await import('../lib/documentEvents');
+    const written: string[] = [];
+    addDocumentEventClient(TEST_USER_ID, { write: (chunk: string) => { written.push(chunk); return true; } } as never);
+    const a = await connectAndSync();
+    a.ws.send(frame(FRAME_UPDATE, new Uint8Array([1, 2, 3])));
+    await vi.waitFor(() => expect(written).toEqual([`event: content-changed\ndata: {"ids":["${DOC_NAME}"]}\n\n`]));
+    a.ws.close();
+  });
+
   it('fans an update out to the other clients of the document', async () => {
     const a = await connectAndSync();
     const b = await connectAndSync();

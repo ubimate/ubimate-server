@@ -10,6 +10,27 @@ export type DocumentType = 'page' | 'db-page' | 'folder' | 'db-folder' | 'worksp
  * This is the canonical shape shared between the server and all clients.
  */
 /**
+ * The deepest `indent` the editor's own commands will produce.
+ *
+ * Ubimate's document is a flat sequence of blocks whose ancestry is *derived*
+ * from `indent` (`Indent.ts`, `Folding.ts`), and a block may sit at most one
+ * level below the block above it. This is the ceiling on top of that rule, and
+ * `buildFullExtensions` configures the indent extension with it.
+ *
+ * **It bounds the commands, not what a document may contain.** Parsing does not
+ * enforce it, so imported content can legitimately arrive deeper — a Notion list
+ * nested twenty levels keeps all twenty, because clamping would flatten the
+ * levels below this one into siblings and lose the hierarchy
+ * ([`NOTION-IMPORT.md`](../../../docs/NOTION-IMPORT.md) §5). The consequence is
+ * only that the user cannot indent further; outdenting works, and Folding still
+ * resolves ancestry.
+ *
+ * Here rather than inline so the editor's configuration, the docs and any future
+ * clamp all name one number.
+ */
+export const MAX_INDENT_LEVEL = 12;
+
+/**
  * Bits of `Document.status`.
  *
  * A bitfield rather than an enum because a document can be both archived and
@@ -31,7 +52,15 @@ export interface Document {
   position: string;
   properties: Record<string, unknown>;
   created_at: number; // Unix ms
-  updated_at: number; // Unix ms
+  /** Unix ms of the row's last write of any kind — including a save of its Yjs content. */
+  updated_at: number;
+  /**
+   * Unix ms clock of the last parent/position change: the last-write-wins key for a move. Absent from
+   * servers that predate it; the sync then compares `updated_at`.
+   */
+  last_struct_ts?: number;
+  /** Unix ms clock of the last `properties` change: the last-write-wins key for a rename. See `last_struct_ts`. */
+  last_properties_ts?: number;
   /**
    * Archival/trash status bitfield.
    *   0 = active (normal)
@@ -42,15 +71,25 @@ export interface Document {
    * Bit 0 (0x1) = archived; Bit 1 (0x2) = trashed; Bit 2 (0x4) = deleted.
    */
   status: number;
-  /** Unix epoch seconds; null when the document has never left the active state. */
+  /**
+   * Unix ms clock of the last status change: the last-write-wins key for archive, trash and delete.
+   * null when the status never changed, which loses to any change.
+   */
   status_timestamp: number | null;
   /**
-   * SHA-256 hex digest of the Yjs state vector (`Y.encodeStateVector(ydoc)`).
-   * Computed client-side on each Yjs persist; used to skip unchanged documents
-   * during initial Yjs sync (hash equality ⇒ identical CRDT state).
-   * null when no Yjs content has been persisted yet.
+   * SHA-256 hex digest of the Yjs *snapshot* — state vector and delete set
+   * (`computeYjsStateHash`). Computed client-side on each Yjs persist; used to skip unchanged
+   * documents during initial Yjs sync, and as a page's revision. Named for the state vector it
+   * hashed until 2026-09-30, which a deletion does not change. null when no Yjs content has been
+   * persisted yet.
    */
   yjs_sv_hash?: string | null;
+  /**
+   * Local stores only (desktop and mobile): one sequence across all pages, advanced by every write
+   * of a page's Yjs content, whoever makes it — the editor, sync, an import. The HTML mirror reads
+   * the pages above the highest value it has handled. 0 for content never written on this device.
+   */
+  content_seq?: number;
 }
 
 /** Payload for POST /api/documents */
@@ -228,6 +267,12 @@ export interface BlockRegistryEntry {
     columns: string[];
     /** rowId → { columnName → value } restricted to `columns`. */
     rows: Record<string, Record<string, string>>;
+    /**
+     * Unix ms at which a scan found this projection no longer fully needed — no consumer left, or
+     * columns none needs. It is dropped or narrowed only by a scan PROJECTION_UNUSED_GRACE_MS later
+     * (apps/web/src/lib/blockRegistryUtils.ts); a consumer needing it again clears the mark.
+     */
+    unusedSince?: number;
   };
   /** Surrounding prose text snippet for date/datetime entries (calendar sidebar display). */
   excerpt?: string;

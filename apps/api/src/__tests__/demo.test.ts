@@ -293,10 +293,8 @@ describe('runDemoCleanup', () => {
 
     runDemoCleanup();
 
-    // Row should still exist
-    const row = (registryStmts as unknown as { getUserById?: { get: (id: string) => unknown } })
-      .getUserById?.get(userId);
-    // getUserById may not exist; fall back to checking that the user doesn't appear in expired list
+    // `getUserById` may not exist on every build, so the check that matters is the
+    // one below: the user must not appear in the expired list.
     const expired = registryStmts.listExpiredDemoUsers.all(Date.now()) as { id: string }[];
     expect(expired.some((r) => r.id === userId)).toBe(false);
   });

@@ -45,6 +45,7 @@ import { RELAY_FRAME } from '@ubimate/types';
 import { getUserDb } from './db/userDb';
 import { registryStmts } from './db/registry';
 import { JWT_SECRET } from './middleware/auth';
+import { broadcastContentChanged } from './lib/documentEvents';
 
 // Frame type bytes — shared with the client provider so the two cannot drift.
 const {
@@ -167,7 +168,7 @@ export const relay = {
    * Handle a freshly upgraded WebSocket. Mirrors hocuspocus.handleConnection's
    * call signature so index.ts can swap it in directly.
    */
-  handleConnection(ws: WebSocket, request: IncomingMessage): void {
+  handleConnection(ws: WebSocket, _request: IncomingMessage): void {
     let member: RelaySocket | null = null;
 
     ws.on('message', (data) => {
@@ -219,6 +220,8 @@ export const relay = {
         case FRAME_UPDATE: {
           try {
             getUserDb(member.userId).appendYjsUpdate(member.documentName, payload);
+            // Devices without the page open are not in this room: tell them it changed.
+            broadcastContentChanged(member.userId, member.documentName);
           } catch (err) {
             console.warn(`[relay] append failed for "${member.documentName}":`, err);
           }
