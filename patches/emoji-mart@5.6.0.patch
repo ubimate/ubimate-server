@@ -1,0 +1,50 @@
+diff --git a/dist/main.js b/dist/main.js
+index c37516f6d96edc7bd0b3fd0a71a7ee78a1d17c1f..ba815521bcd1f54e641b5fad7c338215b6f794f1 100644
+--- a/dist/main.js
++++ b/dist/main.js
+@@ -1843,6 +1843,10 @@ var $f39d0d696aba82c3$export$2e2bcd8739ae039 = {
+             "none"
+         ]
+     },
++    // Ubimate patch, see `skipNativeSupportTest` in `init`.
++    skipNativeSupportTest: {
++        value: false
++    },
+     noCountryFlags: {
+         value: false
+     },
+@@ -2157,7 +2161,8 @@ function $47b4a70d4572a3b3$var$__init() {
+                     });
+                     latestVersionSupport = null;
+                     noCountryFlags = null;
+-                    if (set == "native") {
++                    // Ubimate patch: `skipNativeSupportTest` keeps every emoji when the app draws them with its own font.
++                    if (set == "native" && !props.skipNativeSupportTest) {
+                         latestVersionSupport = (0, $551eac79ded07bc8$export$2e2bcd8739ae039).latestVersion();
+                         noCountryFlags = props.noCountryFlags || (0, $551eac79ded07bc8$export$2e2bcd8739ae039).noCountryFlags();
+                     }
+diff --git a/dist/module.js b/dist/module.js
+index d6ac04912fa640598fedf98a76e9f0bd86db0cc9..b207c83db96543a8aeb0caefadbee0d45481dbd0 100644
+--- a/dist/module.js
++++ b/dist/module.js
+@@ -626,6 +626,10 @@ var $b247ea80b67298d5$export$2e2bcd8739ae039 = {
+             "none"
+         ]
+     },
++    // Ubimate patch, see `skipNativeSupportTest` in `init`.
++    skipNativeSupportTest: {
++        value: false
++    },
+     noCountryFlags: {
+         value: false
+     },
+@@ -782,7 +786,8 @@ async function $7adb23b0109cc36a$var$_init(props) {
+     });
+     let latestVersionSupport = null;
+     let noCountryFlags = null;
+-    if (set == "native") {
++    // Ubimate patch: `skipNativeSupportTest` keeps every emoji when the app draws them with its own font.
++    if (set == "native" && !props.skipNativeSupportTest) {
+         latestVersionSupport = (0, $c84d045dcc34faf5$export$2e2bcd8739ae039).latestVersion();
+         noCountryFlags = props.noCountryFlags || (0, $c84d045dcc34faf5$export$2e2bcd8739ae039).noCountryFlags();
+     }

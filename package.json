@@ -15,5 +15,13 @@
   },
   "keywords": [],
   "author": "",
-  "license": "Elastic-2.0"
+  "license": "Elastic-2.0",
+  "devDependencies": {
+    "@vitest/coverage-v8": "4.1.4"
+  },
+  "pnpm": {
+    "patchedDependencies": {
+      "emoji-mart@5.6.0": "patches/emoji-mart@5.6.0.patch"
+    }
+  }
 }

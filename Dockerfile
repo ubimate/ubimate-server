@@ -20,6 +20,7 @@ WORKDIR /app
 
 # Copy workspace manifests for layer caching
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY patches/ patches/
 COPY packages/types/package.json packages/types/
 COPY packages/utils/package.json packages/utils/
 COPY packages/crypto/package.json packages/crypto/
@@ -59,6 +60,7 @@ RUN npm install -g pnpm@8.9.2
 WORKDIR /app
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY patches/ patches/
 COPY packages/types/package.json packages/types/
 COPY packages/utils/package.json packages/utils/
 COPY packages/crypto/package.json packages/crypto/
@@ -98,6 +100,7 @@ RUN apk add --no-cache curl
 WORKDIR /app
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY patches/ patches/
 COPY packages/types/package.json packages/types/
 COPY packages/utils/package.json packages/utils/
 COPY packages/crypto/package.json packages/crypto/
@@ -145,6 +148,7 @@ RUN npm install -g pnpm@8.9.2
 WORKDIR /app
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY patches/ patches/
 COPY packages/types/package.json packages/types/
 COPY packages/crypto/package.json packages/crypto/
 COPY packages/auth-core/package.json packages/auth-core/
@@ -192,6 +196,7 @@ RUN apk add --no-cache curl
 WORKDIR /app
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY patches/ patches/
 COPY packages/types/package.json packages/types/
 COPY packages/utils/package.json packages/utils/
 COPY packages/crypto/package.json packages/crypto/
@@ -232,6 +237,7 @@ RUN apk add --no-cache curl
 WORKDIR /app
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY patches/ patches/
 COPY packages/types/package.json packages/types/
 COPY packages/utils/package.json packages/utils/
 COPY packages/crypto/package.json packages/crypto/
