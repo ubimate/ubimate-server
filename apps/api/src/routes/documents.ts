@@ -232,6 +232,31 @@ documentsRouter.put('/:id', (req: Request, res: Response) => {
   res.json(toOut({ ...updated, created_at: existing.created_at }));
 });
 
+/**
+ * Whether `doc` may move under `parentId`, and whether that takes it to another Space.
+ *
+ * A Space stays at the root and anything else stays inside a Space; nothing moves into its own
+ * subtree. Moving to another Space is allowed: the client re-encrypts what moved under the
+ * destination's key (docs/SPACE-MOVES.md), and the server only forgets the moved content's hashes so
+ * that every device's next sync does its part.
+ */
+function checkMove(
+  handle: { findWorkspaceId: (id: string) => string | null; stmts: { getDocument: { get: (id: string) => unknown } } },
+  doc: DocumentRow,
+  parentId: string | null,
+): 'same-space' | 'across-spaces' | 'invalid' {
+  if (doc.type === 'workspace') return parentId === null ? 'same-space' : 'invalid';
+  if (parentId === null) return 'invalid';
+  for (let id: string | null = parentId, depth = 0; id !== null && depth < 50; depth++) {
+    if (id === doc.id) return 'invalid';
+    id = (handle.stmts.getDocument.get(id) as DocumentRow | undefined)?.parent_id ?? null;
+  }
+  const source = handle.findWorkspaceId(doc.id);
+  const dest = handle.findWorkspaceId(parentId);
+  if (dest === null) return 'invalid';
+  return source === dest ? 'same-space' : 'across-spaces';
+}
+
 // ---------------------------------------------------------------------------
 // PATCH /api/documents/:id/reposition
 // ---------------------------------------------------------------------------
@@ -246,21 +271,8 @@ documentsRouter.patch('/:id/reposition', (req: Request, res: Response) => {
     return res.json(toOut(existing));
   }
 
-  // Reject cross-workspace moves. Relocating a document into another workspace
-  // requires re-keying its encrypted properties and Yjs history to the
-  // destination workspace key (see docs/KEY-PER-WORKSPACE.md §8), which is not
-  // yet implemented — tracked as a roadmap feature. Repositioning a workspace
-  // node itself (reordering among top-level workspaces) is unaffected.
-  if (existing.type !== 'workspace') {
-    const { findWorkspaceId } = req.userDbHandle;
-    const sourceWorkspaceId = findWorkspaceId(existing.id);
-    const destWorkspaceId = parent_id ? findWorkspaceId(parent_id) : null;
-    if (sourceWorkspaceId !== destWorkspaceId) {
-      return res
-        .status(409)
-        .json({ error: 'Moving items between spaces is not supported' });
-    }
-  }
+  const move = checkMove(req.userDbHandle, existing, parent_id);
+  if (move === 'invalid') return res.status(409).json({ error: 'A page cannot move there' });
 
   let position: string;
 
@@ -296,6 +308,7 @@ documentsRouter.patch('/:id/reposition', (req: Request, res: Response) => {
   };
 
   stmts.repositionDocument.run(updated);
+  if (move === 'across-spaces') stmts.markSubtreeContentStale.run(existing.id);
   broadcastTreeChanged(req.userId);
   res.json(toOut({ ...updated, created_at: existing.created_at }));
 });
@@ -442,14 +455,8 @@ documentsRouter.post('/sync/structural', (req: Request, res: Response) => {
         const { parent_id = null, before_id = null, position: directPosition } =
           op.payload as RepositionDocumentPayload;
 
-        // Reject cross-workspace moves (see the PATCH /:id/reposition handler and
-        // docs/KEY-PER-WORKSPACE.md §8). Skip the op rather than fail the batch so
-        // the remaining structural ops still replay.
-        if (existing.type !== 'workspace') {
-          const sourceWorkspaceId = req.userDbHandle.findWorkspaceId(existing.id);
-          const destWorkspaceId = parent_id ? req.userDbHandle.findWorkspaceId(parent_id) : null;
-          if (sourceWorkspaceId !== destWorkspaceId) { skipped++; continue; }
-        }
+        const move = checkMove(req.userDbHandle, existing, parent_id);
+        if (move === 'invalid') { skipped++; continue; }
 
         let position: string;
         // If the sync layer supplied the exact fractional-index position string,
@@ -481,6 +488,7 @@ documentsRouter.post('/sync/structural', (req: Request, res: Response) => {
           updated_at:    op.client_ts,
           last_struct_ts: op.client_ts,
         });
+        if (move === 'across-spaces') stmts.markSubtreeContentStale.run(existing.id);
         applied++;
         continue;
       }

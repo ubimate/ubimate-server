@@ -28,6 +28,7 @@ export interface UserStmts {
   updateDocument: Statement;
   deleteDocument: Statement;
   deleteYjsUpdatesForSubtree: Statement;
+  markSubtreeContentStale: Statement;
   archiveDocument: Statement;
   unarchiveDocument: Statement;
   updateDocumentStatus: Statement;
@@ -171,6 +172,19 @@ export function initUserDb(dbPath: string): UserDbHandle {
       )
       UPDATE documents SET status = 4, status_timestamp = ?, updated_at = ?
       WHERE id IN (SELECT id FROM subtree)
+    `),
+    /**
+     * Forget the content hash of a subtree, so every device's next sync treats its content as changed.
+     * Used when the subtree moves to another Space: its content must be re-encrypted under that Space's
+     * key, which only a client can do (docs/SPACE-MOVES.md).
+     */
+    markSubtreeContentStale: db.prepare(`
+      WITH RECURSIVE subtree(id) AS (
+        SELECT id FROM documents WHERE id = ?
+        UNION ALL
+        SELECT d.id FROM documents d JOIN subtree s ON d.parent_id = s.id
+      )
+      UPDATE documents SET yjs_sv_hash = NULL WHERE id IN (SELECT id FROM subtree)
     `),
     deleteYjsUpdatesForSubtree: db.prepare(`
       WITH RECURSIVE subtree(id) AS (
