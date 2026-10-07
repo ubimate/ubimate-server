@@ -293,6 +293,32 @@ export interface BlockRegistryEntry {
   mediaFileSize?: number;
   /** Unix ms timestamp at last write. */
   updatedAt: number;
+  /**
+   * Unix ms at which the entry was first written; absent on entries older than 2026-10-07. A block
+   * with no `names` entry claims its label at this time (docs/BLOCK-NAMES.md §4.2), so a table
+   * created a moment ago cannot outrank an existing one before the name repair has run.
+   */
+  createdAt?: number;
+  /**
+   * Unix ms at which an open of the block's page found no node for it — a table deleted or moved off
+   * the page, whose data and entry outlive it (docs/BLOCK-NAMES.md §4.2). Naming ignores it, so it
+   * holds no name; a table that comes back re-registers without it, as a newcomer.
+   */
+  orphanedAt?: number;
+}
+
+/**
+ * A block's public name (docs/BLOCK-NAMES.md §4.2).
+ * Stored in the block-registry Y.Doc under the `names` Y.Map (key = blockId), apart from the
+ * `blocks` entry, which every save rewrites whole and would undo a concurrent rename.
+ */
+export interface NameEntry {
+  /** The namespace the name is unique in, e.g. "db" (`namespaceOf`). */
+  namespace: string;
+  /** The name as the user spelled it. Compared by `nameKey`, never byte-for-byte. */
+  label: string;
+  /** Unix ms of the claim. The earliest claim keeps a contested name (§4.4). */
+  claimedAt: number;
 }
 
 /**
