@@ -59,11 +59,17 @@ app.use(helmet({ contentSecurityPolicy: false }));
 //       This is safe because the SPA loads no external CDN resources —
 //       all scripts, styles, and fonts are bundled and self-hosted.
 //
-// Tauri webview requests carry no Origin header; the guard skips them so
-// desktop clients are unaffected.
+// Tauri webview requests are skipped so desktop clients are unaffected.
+//
+// Tauri desktop origins: tauri://localhost on macOS/Linux; on Windows
+// http://tauri.localhost by default (https:// when the app sets
+// useHttpsScheme). Missing the http:// one rejected every request the
+// Windows app made — CORS, "Failed to fetch".
+const TAURI_ORIGINS = ['http://tauri.localhost', 'https://tauri.localhost', 'tauri://localhost'];
+
 app.use((_req, res, next) => {
   const origin = _req.headers.origin ?? '';
-  const isTauri = origin === 'tauri://localhost' || origin === 'https://tauri.localhost';
+  const isTauri = TAURI_ORIGINS.includes(origin);
   if (!isTauri) {
     res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
     res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
@@ -73,11 +79,9 @@ app.use((_req, res, next) => {
 
 // In production set CORS_ORIGIN to the exact origin (e.g. https://app.ubimate.com)
 // or a comma-separated list (e.g. https://app.ubimate.com,http://localhost:5173).
-// Tauri desktop origins (https://tauri.localhost, tauri://localhost) are always allowed.
+// Tauri desktop origins (TAURI_ORIGINS above) are always allowed.
 // In development we allow any localhost / 127.0.0.1 / ::1 origin on any port
 // so Safari, Chrome, and Tauri webviews all work without extra config.
-const TAURI_ORIGINS = ['https://tauri.localhost', 'tauri://localhost'];
-
 function isLocalhostOrigin(origin: string): boolean {
   try {
     const url = new URL(origin);
