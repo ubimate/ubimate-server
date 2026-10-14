@@ -44,6 +44,9 @@ export interface UserStmts {
   appendYjsUpdate: Statement;
   compactYjsUpdates: Statement;
   updateYjsSvHash: Statement;
+  getYjsUpdatesWithIds: Statement;
+  yjsVersion: Statement;
+  stampYjsSvHash: Statement;
 }
 
 export interface UserDbHandle {
@@ -59,6 +62,13 @@ export interface UserDbHandle {
   appendYjsUpdate(documentId: string, update: Uint8Array): void;
   compactYjsUpdates(documentId: string, snapshot: Uint8Array, yjsSvHash?: string | null): void;
   countYjsUpdates(documentId: string): number;
+  getYjsUpdatesVersioned(documentId: string): { updates: Buffer[]; version: number };
+  storeYjsUpdate(
+    documentId: string,
+    update: Uint8Array,
+    opts: { replace: boolean; yjsSvHash: string | null; seen?: number },
+  ): 'stored' | 'conflict';
+  stampYjsSvHash(documentId: string, yjsSvHash: string, seen: number): boolean;
   /**
    * Traverse the parent chain for `documentId` and return the ID of the
    * nearest ancestor whose `type = 'workspace'`, or null if not found.
@@ -258,6 +268,22 @@ export function initUserDb(dbPath: string): UserDbHandle {
     updateYjsSvHash: db.prepare(`
       UPDATE documents SET yjs_sv_hash = @yjs_sv_hash WHERE id = @id
     `),
+    getYjsUpdatesWithIds: db.prepare(`
+      SELECT id, data FROM yjs_updates
+      WHERE document_id = ?
+      ORDER BY id ASC
+    `),
+    // The content's version: the newest row's id, 0 with none. Ids are AUTOINCREMENT, never reused,
+    // so every append and every compaction moves it forward.
+    yjsVersion: db.prepare(`
+      SELECT COALESCE(MAX(id), 0) AS version FROM yjs_updates WHERE document_id = ?
+    `),
+    // One statement, so nothing can be stored between the comparison and the write.
+    stampYjsSvHash: db.prepare(`
+      UPDATE documents SET yjs_sv_hash = @yjs_sv_hash
+      WHERE id = @id
+        AND (SELECT COALESCE(MAX(id), 0) FROM yjs_updates WHERE document_id = @id) = @seen
+    `),
   };
 
   function getYjsUpdates(documentId: string): Buffer[] {
@@ -300,6 +326,42 @@ export function initUserDb(dbPath: string): UserDbHandle {
     })();
   }
 
+  function getYjsUpdatesVersioned(documentId: string): { updates: Buffer[]; version: number } {
+    const rows = stmts.getYjsUpdatesWithIds.all(documentId) as { id: number; data: Buffer }[];
+    return { updates: rows.map((r) => r.data), version: rows.length ? rows[rows.length - 1].id : 0 };
+  }
+
+  /**
+   * Store a client's blob, appended or replacing everything, with the hash of the state it holds —
+   * guarded by `seen`, the version the client read before computing it (`getYjsUpdatesVersioned`).
+   *
+   * Content stored since then is content the client did not see: a replacing snapshot would delete it,
+   * so it is refused (`'conflict'`, nothing written); an append is kept, without the hash, which no
+   * longer describes what is stored. Without `seen` (an older client) it stores as before.
+   */
+  function storeYjsUpdate(
+    documentId: string,
+    update: Uint8Array,
+    opts: { replace: boolean; yjsSvHash: string | null; seen?: number },
+  ): 'stored' | 'conflict' {
+    return db.transaction((): 'stored' | 'conflict' => {
+      const current = (stmts.yjsVersion.get(documentId) as { version: number }).version;
+      const stale = opts.seen !== undefined && current !== opts.seen;
+      if (stale && opts.replace) return 'conflict';
+      if (opts.replace) compactYjsUpdates(documentId, update, opts.yjsSvHash);
+      else appendYjsUpdate(documentId, update);
+      if (!opts.replace && opts.yjsSvHash && !stale) {
+        stmts.updateYjsSvHash.run({ id: documentId, yjs_sv_hash: opts.yjsSvHash });
+      }
+      return 'stored';
+    })();
+  }
+
+  /** Record the hash of the stored content, if it is still the content of version `seen`. */
+  function stampYjsSvHash(documentId: string, yjsSvHash: string, seen: number): boolean {
+    return stmts.stampYjsSvHash.run({ id: documentId, yjs_sv_hash: yjsSvHash, seen }).changes > 0;
+  }
+
   function countYjsUpdates(documentId: string): number {
     const row = stmts.countYjsUpdates.get(documentId) as { count: number };
     return row.count;
@@ -325,7 +387,13 @@ export function initUserDb(dbPath: string): UserDbHandle {
     appendYjsUpdate,
     compactYjsUpdates,
     countYjsUpdates,
+    getYjsUpdatesVersioned,
+    storeYjsUpdate,
+    stampYjsSvHash,
   });
 
-  return { db, stmts, storage, getYjsUpdates, appendYjsUpdate, compactYjsUpdates, countYjsUpdates, findWorkspaceId };
+  return {
+    db, stmts, storage, getYjsUpdates, appendYjsUpdate, compactYjsUpdates, countYjsUpdates,
+    getYjsUpdatesVersioned, storeYjsUpdate, stampYjsSvHash, findWorkspaceId,
+  };
 }

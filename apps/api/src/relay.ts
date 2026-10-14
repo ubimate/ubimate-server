@@ -41,7 +41,7 @@
 import type { WebSocket } from 'ws';
 import type { IncomingMessage } from 'http';
 import jwt from 'jsonwebtoken';
-import { RELAY_FRAME } from '@ubimate/types';
+import { RELAY_FRAME } from '@ubimate/utils';
 import { getUserDb } from './db/userDb';
 import { registryStmts } from './db/registry';
 import { JWT_SECRET } from './middleware/auth';

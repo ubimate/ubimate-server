@@ -100,6 +100,20 @@ export interface StoragePort {
   getYjsUpdates(documentId: string): Promise<Uint8Array[]>;
   appendYjsUpdate(documentId: string, update: Uint8Array): Promise<void>;
   countYjsUpdates(documentId: string): Promise<number>;
+  /** The blobs and their version: the newest row's id, 0 with none; every write moves it forward. */
+  getYjsUpdatesVersioned(documentId: string): Promise<{ updates: Uint8Array[]; version: number }>;
+  /**
+   * Store a client's blob with the hash of the state it holds, guarded by `seen`, the version the
+   * client read: a replacing snapshot over content stored since is refused (`'conflict'`); an append
+   * is kept without the hash. Without `seen`, unguarded.
+   */
+  storeYjsUpdate(
+    documentId: string,
+    update: Uint8Array,
+    opts: { replace: boolean; yjsSvHash: string | null; seen?: number },
+  ): Promise<'stored' | 'conflict'>;
+  /** Record the hash of the stored content if it is still version `seen`; false when it moved on. */
+  stampYjsSvHash(documentId: string, yjsSvHash: string, seen: number): Promise<boolean>;
   compactYjsUpdates(
     documentId: string,
     snapshot: Uint8Array,

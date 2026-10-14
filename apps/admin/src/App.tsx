@@ -220,7 +220,7 @@ const AdminLogin: React.FC<AdminLoginProps> = ({ onLogin, api, baseUrl, onSetBas
           initialValues={{ apiUrl: baseUrl }}
         >
           <Form.Item name="apiUrl" label="API URL" rules={[{ required: true, message: 'Enter the API server URL' }]}>
-            <Input placeholder="https://app.ubimate.com" autoComplete="off" />
+            <Input placeholder="https://ubimate.app" autoComplete="off" />
           </Form.Item>
           <Form.Item name="username" label="Username" rules={[{ required: true, message: 'Enter admin username' }]}>
             <Input autoComplete="username" />

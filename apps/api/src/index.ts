@@ -77,8 +77,8 @@ app.use((_req, res, next) => {
   next();
 });
 
-// In production set CORS_ORIGIN to the exact origin (e.g. https://app.ubimate.com)
-// or a comma-separated list (e.g. https://app.ubimate.com,http://localhost:5173).
+// In production set CORS_ORIGIN to the exact origin (e.g. https://ubimate.app)
+// or a comma-separated list (e.g. https://ubimate.app,http://localhost:5173).
 // Tauri desktop origins (TAURI_ORIGINS above) are always allowed.
 // In development we allow any localhost / 127.0.0.1 / ::1 origin on any port
 // so Safari, Chrome, and Tauri webviews all work without extra config.
@@ -170,6 +170,14 @@ if (process.env.NODE_ENV === 'production') {
   const ADMIN_ROOT = path.join(__dirname, '../../admin/dist');
   app.use('/admin', express.static(ADMIN_ROOT));
   app.get('/admin/*path', (_req, res) => res.sendFile(path.join(ADMIN_ROOT, 'index.html')));
+
+  // Mobile web app — served under /m, also before the catch-all. Built only into the
+  // unified image; the API image has no mobile-web/dist and skips it.
+  const MOBILE_ROOT = path.join(__dirname, '../../mobile-web/dist');
+  if (fs.existsSync(MOBILE_ROOT)) {
+    app.use('/m', express.static(MOBILE_ROOT));
+    app.get(['/m', '/m/*path'], (_req, res) => res.sendFile(path.join(MOBILE_ROOT, 'index.html')));
+  }
 
   const SPA_ROOT = path.join(__dirname, '../../web/dist');
   if (fs.existsSync(SPA_ROOT)) {

@@ -30,6 +30,13 @@ export interface SqliteStorageBackend {
   getYjsUpdates(documentId: string): Buffer[];
   appendYjsUpdate(documentId: string, update: Uint8Array): void;
   compactYjsUpdates(documentId: string, snapshot: Uint8Array, yjsSvHash?: string | null): void;
+  getYjsUpdatesVersioned(documentId: string): { updates: Buffer[]; version: number };
+  storeYjsUpdate(
+    documentId: string,
+    update: Uint8Array,
+    opts: { replace: boolean; yjsSvHash: string | null; seen?: number },
+  ): 'stored' | 'conflict';
+  stampYjsSvHash(documentId: string, yjsSvHash: string, seen: number): boolean;
   countYjsUpdates(documentId: string): number;
 }
 
@@ -119,6 +126,18 @@ export function createSqliteStoragePort(backend: SqliteStorageBackend): StorageP
 
     async appendYjsUpdate(documentId, update): Promise<void> {
       backend.appendYjsUpdate(documentId, update);
+    },
+
+    async getYjsUpdatesVersioned(documentId): Promise<{ updates: Uint8Array[]; version: number }> {
+      return backend.getYjsUpdatesVersioned(documentId);
+    },
+
+    async storeYjsUpdate(documentId, update, opts): Promise<'stored' | 'conflict'> {
+      return backend.storeYjsUpdate(documentId, update, opts);
+    },
+
+    async stampYjsSvHash(documentId, yjsSvHash, seen): Promise<boolean> {
+      return backend.stampYjsSvHash(documentId, yjsSvHash, seen);
     },
 
     async countYjsUpdates(documentId): Promise<number> {

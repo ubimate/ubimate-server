@@ -678,10 +678,11 @@ documentsRouter.delete('/:id', (req: Request, res: Response) => {
 // initial / reconnect catch-up sync.
 // ---------------------------------------------------------------------------
 documentsRouter.get('/:id/yjs', async (req: Request, res: Response) => {
-  const updates = await req.userDbHandle.storage.getYjsUpdates(req.params.id);
-  // Opaque pass-through: emit the stored blobs verbatim, in order.
+  const { updates, version } = await req.userDbHandle.storage.getYjsUpdatesVersioned(req.params.id);
+  // Opaque pass-through: emit the stored blobs verbatim, in order. `version` is what a client hands
+  // back as `seen` when it stores or stamps a hash computed from these blobs.
   const blobs = updates.map((u) => Buffer.from(u).toString('base64'));
-  return res.json({ updates: blobs });
+  return res.json({ updates: blobs, version });
 });
 
 // ---------------------------------------------------------------------------
@@ -691,17 +692,21 @@ documentsRouter.get('/:id/yjs', async (req: Request, res: Response) => {
 // compaction is client-driven via `replace`, and the state hash (of the Yjs
 // snapshot, SYNC-INCREMENTAL.md §2) is supplied by the client and stored verbatim.
 //
-// Body: { update: string; yjs_sv_hash?: string; replace?: boolean }
+// Body: { update: string; yjs_sv_hash?: string; replace?: boolean; seen?: number }
 //   - update: base64-encoded opaque (encrypted) Yjs blob
 //   - yjs_sv_hash: client-computed hash of the merged state (stored as-is)
 //   - replace: when true, replace ALL stored blobs with this single snapshot
 //              (client-driven compaction); otherwise append.
+//   - seen: the `version` of the GET the client merged. Content stored since is content it did not
+//           see: a replace is refused with 409 (it would delete it), an append is kept without the
+//           hash (which no longer describes what is stored). Omitted, unguarded (older clients).
 // ---------------------------------------------------------------------------
 documentsRouter.post('/:id/yjs', async (req: Request, res: Response) => {
-  const { update, yjs_sv_hash, replace } = req.body as {
+  const { update, yjs_sv_hash, replace, seen } = req.body as {
     update?: string;
     yjs_sv_hash?: string;
     replace?: boolean;
+    seen?: number;
   };
   if (typeof update !== 'string' || !update) {
     return res.status(400).json({ error: 'update (base64 string) is required' });
@@ -716,14 +721,13 @@ documentsRouter.post('/:id/yjs', async (req: Request, res: Response) => {
 
   const { storage } = req.userDbHandle;
 
-  if (replace) {
-    // Client-driven compaction: replace the stored blobs with one snapshot.
-    await storage.compactYjsUpdates(req.params.id, updateBytes, yjs_sv_hash ?? null);
-  } else {
-    await storage.appendYjsUpdate(req.params.id, updateBytes);
-    if (yjs_sv_hash) {
-      await storage.updateYjsSvHash(req.params.id, yjs_sv_hash);
-    }
+  const stored = await storage.storeYjsUpdate(req.params.id, updateBytes, {
+    replace: !!replace,
+    yjsSvHash: yjs_sv_hash ?? null,
+    seen: typeof seen === 'number' ? seen : undefined,
+  });
+  if (stored === 'conflict') {
+    return res.status(409).json({ error: 'content was stored since this client read it' });
   }
   // Live peers of the document hear about it the same way they would about a
   // socket UPDATE. A replacing snapshot may carry ops nobody has relayed yet
@@ -734,6 +738,24 @@ documentsRouter.post('/:id/yjs', async (req: Request, res: Response) => {
   broadcastContentChanged(req.userId, req.params.id);
 
   return res.status(204).end();
+});
+
+// ---------------------------------------------------------------------------
+// PUT /api/documents/:id/yjs-hash
+// Records the hash of the stored content without storing any: for a client whose merge found
+// nothing to add (SYNC-INCREMENTAL.md). Live relay writes clear the hash; without this it stayed
+// cleared, and the document was fetched again at every launch.
+//
+// Body: { yjs_sv_hash: string; seen: number }  — `seen` is the version of the GET it hashed.
+// Response: { stamped: boolean } — false when content was stored since; nothing is changed then.
+// ---------------------------------------------------------------------------
+documentsRouter.put('/:id/yjs-hash', async (req: Request, res: Response) => {
+  const { yjs_sv_hash, seen } = req.body as { yjs_sv_hash?: string; seen?: number };
+  if (typeof yjs_sv_hash !== 'string' || !yjs_sv_hash || typeof seen !== 'number') {
+    return res.status(400).json({ error: 'yjs_sv_hash (string) and seen (number) are required' });
+  }
+  const stamped = await req.userDbHandle.storage.stampYjsSvHash(req.params.id, yjs_sv_hash, seen);
+  return res.json({ stamped });
 });
 
 // ---------------------------------------------------------------------------
