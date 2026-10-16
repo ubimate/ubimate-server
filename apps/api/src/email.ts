@@ -42,7 +42,7 @@ export async function sendInvitationEmail(to: string, token: string): Promise<vo
       '',
       `Sign up here: ${registerUrl}`,
       '',
-      `Or enter this invitation token manually: ${token}`,
+      `Or enter this activation token on the Create account form: ${token}`,
       '',
       'This invitation will expire in 7 days.',
     ].join('\n'),
@@ -50,7 +50,7 @@ export async function sendInvitationEmail(to: string, token: string): Promise<vo
       '<h2>You\'re invited to Ubimate!</h2>',
       '<p>You\'ve been invited to create an account on Ubimate.</p>',
       `<p><a href="${registerUrl}" style="display:inline-block;padding:12px 24px;background:#1677ff;color:#fff;text-decoration:none;border-radius:6px;">Create your account</a></p>`,
-      `<p>Or enter this invitation token manually: <code>${token}</code></p>`,
+      `<p>Or enter this activation token on the Create account form: <code>${token}</code></p>`,
       '<p><small>This invitation will expire in 7 days.</small></p>',
     ].join('\n'),
   });

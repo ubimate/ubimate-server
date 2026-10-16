@@ -225,28 +225,29 @@ authRouter.post('/register', authLimiter, async (req: Request, res: Response) =>
     return;
   }
 
-  // Invitation token validation
+  // Invitation token validation. The messages say "activation token", the name the Create account
+  // forms give it (docs/SIGN-UP.md): they reach the user in the passphrase dialog.
   let matchedInvitation: InvitationRow | undefined;
   if (invitationToken && typeof invitationToken === 'string') {
     matchedInvitation = registryStmts.getInvitationByToken.get(invitationToken) as InvitationRow | undefined;
     if (REQUIRE_INVITATION) {
       if (!matchedInvitation) {
-        res.status(400).json({ error: 'Invalid invitation token' });
+        res.status(400).json({ error: 'Invalid activation token' });
         return;
       }
       if (matchedInvitation.accepted_at != null) {
-        res.status(400).json({ error: 'Invitation already used' });
+        res.status(400).json({ error: 'This activation token has already been used' });
         return;
       }
       // Prefer explicit expires_at; fall back to legacy created_at + TTL check.
       const expiredAt = matchedInvitation.expires_at ?? (matchedInvitation.created_at + INVITATION_TTL_MS);
       if (Date.now() > expiredAt) {
-        res.status(400).json({ error: 'Invitation has elapsed' });
+        res.status(400).json({ error: 'This activation token has expired' });
         return;
       }
     }
   } else if (REQUIRE_INVITATION) {
-    res.status(400).json({ error: 'Invitation token is required' });
+    res.status(400).json({ error: 'Activation token is required' });
     return;
   }
 

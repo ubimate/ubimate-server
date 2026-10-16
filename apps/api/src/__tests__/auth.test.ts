@@ -486,7 +486,42 @@ describe('auth router', () => {
 
     expect(res.status).toBe(400);
     const body = await res.json() as { error: string };
-    expect(body.error).toMatch(/elapsed/i);
+    expect(body.error).toBe('This activation token has expired');
+  });
+
+  // What the Create account forms show, in their own word for the token (docs/SIGN-UP.md).
+  it('says what is wrong with the activation token: missing, unknown, already used', async () => {
+    const { registryStmts } = await import('../db/registry');
+    registryStmts.insertInvitation.run({
+      id: randomUUID(),
+      token: 'once-only-invite-token',
+      email: 'onceonly@example.com',
+      created_at: Date.now(),
+      expires_at: Date.now() + 60_000,
+      sender_public_key: null,
+      sender_signature: null,
+    });
+    const register = (email: string, invitationToken?: string) => fetch(`${baseUrl}/api/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email,
+        name: 'Token Tester',
+        invitationToken,
+        publicKey: generateTestKeypair().publicKeyBase64,
+        initialWorkspaceId: randomUUID(),
+        initialWrappedWorkspaceKey: 'wrapped-key-base64',
+      }),
+    });
+    const errorOf = async (res: Response) => ({ status: res.status, error: ((await res.json()) as { error: string }).error });
+
+    expect(await errorOf(await register('nobody@example.com'))).toEqual({ status: 400, error: 'Activation token is required' });
+    expect(await errorOf(await register('nobody@example.com', 'no-such-token'))).toEqual({ status: 400, error: 'Invalid activation token' });
+    expect((await register('onceonly@example.com', 'once-only-invite-token')).status).toBe(201);
+    expect(await errorOf(await register('again@example.com', 'once-only-invite-token'))).toEqual({
+      status: 400,
+      error: 'This activation token has already been used',
+    });
   });
 
   it('includes sender_public_key and sender_signature in 201 response when invitation was signed', async () => {
