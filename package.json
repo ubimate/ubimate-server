@@ -1,6 +1,6 @@
 {
   "name": "ubimate-server",
-  "version": "0.20.5",
+  "version": "0.20.6",
   "private": true,
   "description": "Ubimate self-hostable server (API + admin panel)",
   "scripts": {
