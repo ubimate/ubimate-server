@@ -8,11 +8,18 @@
   "exports": {
     ".": "./src/index.ts"
   },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
   "dependencies": {
     "libsodium-wrappers-sumo": "0.8.4"
   },
   "devDependencies": {
     "@types/libsodium-wrappers-sumo": "0.8.2",
-    "typescript": "5.9.3"
+    "@types/node": "22.10.2",
+    "typescript": "5.9.3",
+    "vitest": "^4.0.8"
   }
 }

@@ -69,27 +69,33 @@ export async function decrypt(versionedBlob: Uint8Array, contentKey: Uint8Array)
 
   const version = versionedBlob[0];
 
+  let currentFormatError: unknown;
   if (version === WIRE_VERSION) {
     // Current format: version (1) || nonce (24) || ciphertext+MAC
     const nonce = versionedBlob.slice(1, 1 + nonceLength);
     const ciphertext = versionedBlob.slice(1 + nonceLength);
-    return sodium.crypto_secretbox_open_easy(ciphertext, nonce, contentKey);
+    try {
+      return sodium.crypto_secretbox_open_easy(ciphertext, nonce, contentKey);
+    } catch (err) {
+      // One legacy blob in 256 has a random nonce starting with 0x01 and lands
+      // here; it gets the legacy attempt below before the error is reported.
+      currentFormatError = err;
+    }
   }
 
   // Legacy format (pre-version-prefix): nonce (24) || ciphertext+MAC
   // Attempt decryption treating the full blob as a legacy payload.
   // If the Poly1305 MAC check also fails, surface the version-mismatch error
   // so the caller knows to prompt the user to update their client.
-  if (versionedBlob.length >= nonceLength + sodium.crypto_secretbox_MACBYTES) {
-    try {
-      const legacyNonce = versionedBlob.slice(0, nonceLength);
-      const legacyCiphertext = versionedBlob.slice(nonceLength);
-      return sodium.crypto_secretbox_open_easy(legacyCiphertext, legacyNonce, contentKey);
-    } catch {
-      // Legacy decryption also failed — fall through to version error below.
-    }
+  try {
+    const legacyNonce = versionedBlob.slice(0, nonceLength);
+    const legacyCiphertext = versionedBlob.slice(nonceLength);
+    return sodium.crypto_secretbox_open_easy(legacyCiphertext, legacyNonce, contentKey);
+  } catch {
+    // Legacy decryption also failed — fall through to the error below.
   }
 
+  if (currentFormatError !== undefined) throw currentFormatError;
   throw new Error(
     `Unsupported wire format version 0x${version.toString(16).padStart(2, '0')}. Please update your client.`
   );

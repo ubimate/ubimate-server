@@ -282,6 +282,53 @@ describe('PUT /api/documents/:id — old src file cleanup', () => {
     expect([doc.last_struct_ts, doc.last_properties_ts]).toEqual([1_000, 2_000]);
   });
 
+  it('leaves an existing document alone when a structural create for it arrives', async () => {
+    // A device pushes a `create` for every row it thinks the cloud lacks. A stale or partial list
+    // must not let an empty, deleted copy replace what the cloud holds.
+    const id = randomUUID();
+    const sync = (ops: unknown[]) => fetch(`${baseUrl}/api/documents/sync/structural`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ops }),
+    }).then((r) => r.json() as Promise<{ applied: number; skipped: number; documents: Array<Record<string, unknown>> }>);
+    await sync([{ op: 'create', id, client_ts: 1_000, payload: { type: 'page', parent_id: null, properties: { title: 'kept' } } }]);
+
+    const body = await sync([{
+      op: 'create', id, client_ts: 9_000,
+      payload: { type: 'page', parent_id: null, properties: {}, status: 4, status_timestamp: 9_000 },
+    }]);
+
+    expect([body.applied, body.skipped]).toEqual([0, 1]);
+    const doc = body.documents.find((d) => d.id === id)!;
+    expect(doc.properties).toEqual({ title: 'kept' });
+    expect(doc.status).toBe(0);
+  });
+
+  it('skips a "deleted" status older than the document\'s own status change', async () => {
+    // Deleted on one device, restored on another later: the restore wins in either order.
+    const id = randomUUID();
+    const sync = (ops: unknown[]) => fetch(`${baseUrl}/api/documents/sync/structural`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ops }),
+    }).then((r) => r.json() as Promise<{ applied: number; skipped: number; documents: Array<Record<string, unknown>> }>);
+    await sync([
+      { op: 'create', id, client_ts: 1_000, payload: { type: 'page', parent_id: null, properties: { title: 'a' } } },
+      { op: 'update_status', id, client_ts: 3_000, payload: { status: 0 } },
+    ]);
+
+    const stale = await sync([
+      { op: 'update_status', id, client_ts: 2_000, payload: { status: 4 } },
+      { op: 'update_status', id, client_ts: 3_000, payload: { status: 4 } },
+    ]);
+    expect([stale.applied, stale.skipped]).toEqual([0, 2]);
+    expect(stale.documents.find((d) => d.id === id)!.status).toBe(0);
+
+    // A newer one applies, so the two above were refused for their clocks.
+    const newer = await sync([{ op: 'update_status', id, client_ts: 3_001, payload: { status: 4 } }]);
+    expect(newer.documents.find((d) => d.id === id)!.status).toBe(4);
+  });
+
   it('persists wrappedWorkspaceKey when a workspace is created via structural sync', async () => {
     const workspaceId = randomUUID();
     const ts = Date.now();

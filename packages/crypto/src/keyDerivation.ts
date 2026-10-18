@@ -36,7 +36,9 @@ export async function deriveKeypair(passphrase: string, email: string): Promise<
   const passphraseBytes = sodium.from_string(passphrase);
   // Salt must be exactly crypto_pwhash_SALTBYTES (16 bytes) for libsodium's Argon2id.
   // We derive a 16-byte salt from the email using SHA-256 (take first 16 bytes).
-  const emailHash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(email));
+  // Lowercased here, not by callers: the server stores emails lowercased, and a
+  // caller that forgot derived keys no other client could re-derive.
+  const emailHash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(email.toLowerCase()));
   const salt = new Uint8Array(emailHash).slice(0, sodium.crypto_pwhash_SALTBYTES);
 
   const seed = sodium.crypto_pwhash(
