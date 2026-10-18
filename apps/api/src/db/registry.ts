@@ -108,7 +108,10 @@ export interface UserRow {
   freetrial_token: string | null;
   /** Canonical account type — e.g. 'regular', 'demo', 'trial', 'perso26', 'perso26_launch'. */
   user_type: string;
-  /** Mutable contact address for billing and notifications. NULL means use `email`. Has no cryptographic role. */
+  /**
+   * Mutable contact address for billing and notifications; has no cryptographic role. Set to `email`
+   * at registration. NULL for demo and trial accounts, whose `email` is not a real address.
+   */
   contact_email: string | null;
   /**
    * ID of the user's protected "home" workspace. Created at registration and
@@ -216,6 +219,9 @@ registryDb.exec(`
   if (!userCols.includes('contact_email')) {
     registryDb.exec(`ALTER TABLE users ADD COLUMN contact_email TEXT`);
   }
+  // Registration fills it in since 2026-10-18; accounts made before then start from their login
+  // email too. Not a demo's: its email (demo-<id>@demo.local) is no one's address.
+  registryDb.exec(`UPDATE users SET contact_email = email WHERE contact_email IS NULL AND is_demo = 0`);
 }
 
 // Migration — add primary_workspace_id column if it does not already exist.
@@ -254,8 +260,8 @@ export interface InvitationRow {
 
 export const registryStmts = {
   createUser: registryDb.prepare(`
-    INSERT INTO users (id, email, properties, created_at, status, public_key, wrapped_content_key, user_type)
-    VALUES (@id, @email, @properties, @created_at, @status, @public_key, @wrapped_content_key, @user_type)
+    INSERT INTO users (id, email, contact_email, properties, created_at, status, public_key, wrapped_content_key, user_type)
+    VALUES (@id, @email, @email, @properties, @created_at, @status, @public_key, @wrapped_content_key, @user_type)
   `),
   createDemoUser: registryDb.prepare(`
     INSERT INTO users (id, email, properties, created_at, status, is_demo, demo_expires_at, user_type)

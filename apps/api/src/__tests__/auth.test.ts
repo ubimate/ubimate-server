@@ -127,9 +127,12 @@ describe('auth router', () => {
       status: string;
       public_key: string | null;
       properties: string;
+      contact_email: string | null;
     } | undefined;
     expect(userRow).toBeDefined();
     expect(userRow?.status).toBe('active');
+    // The contact address starts as the login email.
+    expect(userRow?.contact_email).toBe(email);
     expect(parseUserProperties(userRow as never)).toEqual({ name: 'Alice Example' });
     expect(userRow?.public_key).toBe(keypair.publicKeyBase64);
     const wsKeys = registryStmts.listWorkspaceKeysForUser.all(registerBody.user.id) as { wrapped_key: string }[];

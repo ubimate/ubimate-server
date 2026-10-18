@@ -26,6 +26,11 @@ describe('deriveKeypair', () => {
     expect(typed.ed25519PublicKeyBase64).toBe('ndDgLKRJjl_9dp7IvMAVp2EMjPn3jZqvqtHjCmp7ohU');
   });
 
+  it('ignores spaces around the email, as the server does', async () => {
+    const typed = await deriveKeypair('correct horse battery staple', ' alice@example.com\t\n');
+    expect(typed.ed25519PublicKeyBase64).toBe('ndDgLKRJjl_9dp7IvMAVp2EMjPn3jZqvqtHjCmp7ohU');
+  });
+
   it('gives a different key for a different passphrase or a different email', async () => {
     const base = await deriveKeypair('passphrase one', 'bob@example.com');
     const otherPassphrase = await deriveKeypair('passphrase two', 'bob@example.com');
