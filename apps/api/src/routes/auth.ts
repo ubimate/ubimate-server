@@ -488,19 +488,21 @@ authRouter.post('/login/token', authLimiter, async (req: Request, res: Response)
 // ---------------------------------------------------------------------------
 // POST /api/auth/reset-request
 //
-// Deprecated: password-hash reset flow removed with legacy auth.
+// Deprecated: the password-hash reset flow went with legacy auth. A passphrase cannot be reset:
+// the keys are derived from it on the client, and the server never has them.
 // ---------------------------------------------------------------------------
 authRouter.post('/reset-request', authLimiter, (_req: Request, res: Response) => {
-  res.status(410).json({ error: 'Password reset is no longer supported. Use key-based account recovery from a trusted device.' });
+  res.status(410).json({ error: 'A passphrase cannot be reset: your content is encrypted with keys made from it, and no one, including us, can open it without it.' });
 });
 
 // ---------------------------------------------------------------------------
 // POST /api/auth/reset-confirm
 //
-// Deprecated: password-hash reset flow removed with legacy auth.
+// Deprecated: the password-hash reset flow went with legacy auth. A passphrase cannot be reset:
+// the keys are derived from it on the client, and the server never has them.
 // ---------------------------------------------------------------------------
 authRouter.post('/reset-confirm', authLimiter, (_req: Request, res: Response) => {
-  res.status(410).json({ error: 'Password reset is no longer supported. Use key-based account recovery from a trusted device.' });
+  res.status(410).json({ error: 'A passphrase cannot be reset: your content is encrypted with keys made from it, and no one, including us, can open it without it.' });
 });
 
 // ---------------------------------------------------------------------------
