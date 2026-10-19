@@ -6,6 +6,7 @@ const SMTP_SECURE = process.env.SMTP_SECURE === 'true';
 const SMTP_USER = process.env.SMTP_USER;
 const SMTP_PASS = process.env.SMTP_PASS;
 const SMTP_FROM = process.env.SMTP_FROM;
+const SMTP_BCC = process.env.SMTP_BCC || undefined;
 const APP_URL = process.env.APP_URL;
 
 export const smtpConfigured = !!(SMTP_HOST && SMTP_USER && SMTP_PASS && SMTP_FROM && APP_URL);
@@ -36,6 +37,7 @@ export async function sendActivationEmail(to: string, token: string): Promise<vo
   await transporter.sendMail({
     from: SMTP_FROM,
     to,
+    bcc: SMTP_BCC,
     subject: 'Activate your Ubimate account',
     text: [
       'Your Ubimate account is ready to be activated.',
@@ -66,6 +68,7 @@ export async function sendCredentialResetEmail(to: string, token: string): Promi
   await transporter.sendMail({
     from: SMTP_FROM,
     to,
+    bcc: SMTP_BCC,
     subject: 'Reset your Ubimate sync credentials',
     text: [
       'You requested a Ubimate credential reset.',
