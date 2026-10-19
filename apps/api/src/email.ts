@@ -14,7 +14,7 @@ if (!smtpConfigured) {
   const missing = ['SMTP_HOST', 'SMTP_USER', 'SMTP_PASS', 'SMTP_FROM', 'APP_URL']
     .filter(v => !process.env[v])
     .join(', ');
-  console.warn(`[email] SMTP not fully configured (missing: ${missing}) — invitation emails will not be sent`);
+  console.warn(`[email] SMTP not fully configured (missing: ${missing}) — activation emails will not be sent`);
 }
 
 const transporter = smtpConfigured
@@ -26,7 +26,7 @@ const transporter = smtpConfigured
     })
   : null;
 
-export async function sendInvitationEmail(to: string, token: string): Promise<void> {
+export async function sendActivationEmail(to: string, token: string): Promise<void> {
   if (!transporter) {
     throw new Error('SMTP not configured');
   }
@@ -36,22 +36,22 @@ export async function sendInvitationEmail(to: string, token: string): Promise<vo
   await transporter.sendMail({
     from: SMTP_FROM,
     to,
-    subject: 'You\'re invited to Ubimate',
+    subject: 'Activate your Ubimate account',
     text: [
-      'You\'ve been invited to join Ubimate!',
+      'Your Ubimate account is ready to be activated.',
       '',
-      `Sign up here: ${registerUrl}`,
+      `Activate your account here: ${registerUrl}`,
       '',
       `Or enter this activation token on the Create account form: ${token}`,
       '',
-      'This invitation will expire in 7 days.',
+      'This activation token will expire in 7 days.',
     ].join('\n'),
     html: [
-      '<h2>You\'re invited to Ubimate!</h2>',
-      '<p>You\'ve been invited to create an account on Ubimate.</p>',
-      `<p><a href="${registerUrl}" style="display:inline-block;padding:12px 24px;background:#1677ff;color:#fff;text-decoration:none;border-radius:6px;">Create your account</a></p>`,
+      '<h2>Activate your Ubimate account</h2>',
+      '<p>Your Ubimate account is ready to be activated.</p>',
+      `<p><a href="${registerUrl}" style="display:inline-block;padding:12px 24px;background:#1677ff;color:#fff;text-decoration:none;border-radius:6px;">Activate your account</a></p>`,
       `<p>Or enter this activation token on the Create account form: <code>${token}</code></p>`,
-      '<p><small>This invitation will expire in 7 days.</small></p>',
+      '<p><small>This activation token will expire in 7 days.</small></p>',
     ].join('\n'),
   });
 }

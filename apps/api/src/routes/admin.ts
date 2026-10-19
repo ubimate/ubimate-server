@@ -16,7 +16,7 @@ import {
 } from '../middleware/adminAuth';
 import { registryStmts, getUserType } from '../db/registry';
 import type { InvitationRow } from '../db/registry';
-import { sendInvitationEmail, smtpConfigured } from '../email';
+import { sendActivationEmail, smtpConfigured } from '../email';
 
 const DATA_DIR = process.env.DATA_DIR ?? path.join(__dirname, '../../data');
 const INVITATION_TTL_MS = (Number(process.env.INVITATION_TTL_DAYS) || 7) * 24 * 60 * 60 * 1000;
@@ -291,10 +291,10 @@ adminRouter.post('/invitations', async (req: Request, res: Response) => {
   let emailSent = false;
   if (smtpConfigured) {
     try {
-      await sendInvitationEmail(normalizedEmail, token);
+      await sendActivationEmail(normalizedEmail, token);
       emailSent = true;
     } catch (err) {
-      console.error('[admin] Failed to send invitation email:', err);
+      console.error('[admin] Failed to send activation email:', err);
     }
   }
 
