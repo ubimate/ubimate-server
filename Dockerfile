@@ -39,6 +39,8 @@ RUN pnpm install --frozen-lockfile
 COPY packages/ packages/
 COPY apps/api/ apps/api/
 COPY apps/web/ apps/web/
+# The first run's starting pages (apps/web/src/lib/firstRun.ts imports them).
+COPY userdocs/ userdocs/
 COPY apps/admin/ apps/admin/
 COPY apps/mobile-web/ apps/mobile-web/
 COPY scripts/ scripts/
@@ -115,6 +117,8 @@ RUN pnpm install --frozen-lockfile
 
 COPY packages/ packages/
 COPY apps/web/ apps/web/
+# The first run's starting pages (apps/web/src/lib/firstRun.ts imports them).
+COPY userdocs/ userdocs/
 COPY scripts/ scripts/
 
 RUN pnpm --filter @ubimate/client build
@@ -166,6 +170,8 @@ RUN pnpm install --frozen-lockfile
 
 COPY packages/ packages/
 COPY apps/web/ apps/web/
+# The first run's starting pages (apps/web/src/lib/firstRun.ts imports them).
+COPY userdocs/ userdocs/
 COPY apps/mobile-web/ apps/mobile-web/
 
 # Build-time env vars
@@ -263,6 +269,8 @@ RUN pnpm install --frozen-lockfile
 COPY packages/ packages/
 COPY apps/api/ apps/api/
 COPY apps/web/ apps/web/
+# The first run's starting pages (apps/web/src/lib/firstRun.ts imports them).
+COPY userdocs/ userdocs/
 COPY apps/admin/ apps/admin/
 COPY apps/mobile-web/ apps/mobile-web/
 COPY scripts/ scripts/
