@@ -325,7 +325,7 @@ importers:
         version: 8.48.0(eslint@9.39.1)(typescript@5.9.3)
       vite:
         specifier: 7.3.1
-        version: 7.3.1(@types/node@22.15.0)(tsx@4.19.3)
+        version: 7.3.1(@types/node@22.13.14)(tsx@4.19.3)
       vitest:
         specifier: ^4.0.8
         version: 4.1.4(@vitest/coverage-v8@4.1.4)(jsdom@29.0.0)(vite@7.3.1)
@@ -547,6 +547,9 @@ importers:
       lucide-react:
         specifier: 0.575.0
         version: 0.575.0(react@19.2.0)
+      markdown-it:
+        specifier: 14.1.1
+        version: 14.1.1
       mermaid:
         specifier: 11.17.2
         version: 11.17.2
@@ -599,6 +602,9 @@ importers:
       '@types/katex':
         specifier: 0.16.8
         version: 0.16.8
+      '@types/markdown-it':
+        specifier: 14.1.2
+        version: 14.1.2
       '@types/node':
         specifier: 24.10.1
         version: 24.10.1
@@ -903,7 +909,7 @@ importers:
         version: 8.48.0(eslint@9.39.1)(typescript@5.9.3)
       vite:
         specifier: 7.3.1
-        version: 7.3.1(@types/node@22.15.0)(tsx@4.19.3)
+        version: 7.3.1(@types/node@22.13.14)(tsx@4.19.3)
       vitest:
         specifier: ^4.0.8
         version: 4.1.4(@vitest/coverage-v8@4.1.4)(jsdom@29.0.0)(vite@7.3.1)
@@ -4310,7 +4316,6 @@ packages:
 
   /@types/linkify-it@5.0.0:
     resolution: {integrity: sha512-sVDA58zAw4eWAffKOaQH5/5j3XeayukzDk+ewSsnv3p4yJEZHCCzMDiZM8e0OUrRvmpGZ85jf4yDHkHsgBNr9Q==}
-    dev: false
 
   /@types/lodash.merge@4.6.9:
     resolution: {integrity: sha512-23sHDPmzd59kUgWyKGiOMO2Qb9YtqRO/x4IhkgNUiPQ1+5MUVqi6bCZeq9nBJ17msjIMbEIO5u+XW4Kz6aGUhQ==}
@@ -4334,7 +4339,6 @@ packages:
     dependencies:
       '@types/linkify-it': 5.0.0
       '@types/mdurl': 2.0.0
-    dev: false
 
   /@types/mdurl@1.0.5:
     resolution: {integrity: sha512-6L6VymKTzYSrEf4Nev4Xa1LCHKrlTlYCBMTlQKFuddo1CvQcE52I0mwfOJayueUC7MJuXOeHTcIU683lzd0cUA==}
@@ -4342,7 +4346,6 @@ packages:
 
   /@types/mdurl@2.0.0:
     resolution: {integrity: sha512-RGdgjQUZba5p6QEFAVx2OGb8rQDL/cPRG7GiedRzMcJ1tYnUANBncjbSB1NRGwbvjcPeikRABz2nshyPk1bhWg==}
-    dev: false
 
   /@types/methods@1.1.4:
     resolution: {integrity: sha512-ymXWVrDiCxTBE3+RIrrP533E70eA+9qu7zdWoHuOmGujkYtzf4HQF96b8nwHLqhuf4ykX61IGRIB38CC6/sImQ==}
@@ -4897,7 +4900,7 @@ packages:
       '@vitest/spy': 4.1.4
       estree-walker: 3.0.3
       magic-string: 0.30.21
-      vite: 7.3.1
+      vite: 7.3.1(@types/node@22.15.0)(tsx@4.19.3)
     dev: true
 
   /@vitest/pretty-format@4.1.4:
