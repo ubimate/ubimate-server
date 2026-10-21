@@ -286,6 +286,10 @@ export interface BlockRegistryEntry {
   targetBlockId?: string;
   /** The text after the link in its block (Backlinks sidebar display). */
   excerptAfter?: string;
+  /** A text link's own words (a `page:` link mark); absent for a chip, which shows the title. */
+  linkText?: string;
+  /** The block holding a text link, which has no element of its own to scroll to. */
+  sourceBlockId?: string;
   // ── Media fields (type === 'image' | 'file' | 'audio') ──────────────────
   /** URL/path of the media asset. */
   mediaSrc?: string;
