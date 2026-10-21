@@ -274,10 +274,18 @@ export interface BlockRegistryEntry {
      */
     unusedSince?: number;
   };
-  /** Surrounding prose text snippet for date/datetime entries (calendar sidebar display). */
+  /**
+   * Surrounding prose text snippet for date/datetime entries (calendar sidebar display). For a
+   * page link (type === 'pageLink'), the text before the link in its block.
+   */
   excerpt?: string;
   /** IDs of tagMention nodes that appear in the same block as a date/datetime mention. */
   contextTagIds?: string[];
+  // ── Page link fields (type === 'pageLink'; `value` is the target page's id) ──
+  /** The block the link points at, for a link to one block of its page. */
+  targetBlockId?: string;
+  /** The text after the link in its block (Backlinks sidebar display). */
+  excerptAfter?: string;
   // ── Media fields (type === 'image' | 'file' | 'audio') ──────────────────
   /** URL/path of the media asset. */
   mediaSrc?: string;
