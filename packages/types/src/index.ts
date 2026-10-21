@@ -290,6 +290,11 @@ export interface BlockRegistryEntry {
   linkText?: string;
   /** The block holding a text link, which has no element of its own to scroll to. */
   sourceBlockId?: string;
+  /**
+   * A datatable's links out of its rows (type === 'datatable'), rewritten whole each time the table
+   * registers: page links in its cells, and its relation values. The Backlinks panel reads them.
+   */
+  rowLinks?: DatatableRowLink[];
   // ── Media fields (type === 'image' | 'file' | 'audio') ──────────────────
   /** URL/path of the media asset. */
   mediaSrc?: string;
@@ -317,6 +322,28 @@ export interface BlockRegistryEntry {
    * holds no name; a table that comes back re-registers without it, as a newcomer.
    */
   orphanedAt?: number;
+}
+
+/**
+ * One link out of a datatable row: a page link in a cell (`pageId`), or a relation value pointing at
+ * a row of another table, or this one (`targetBlockId` and `targetRowId`; the panel finds that row's
+ * page, if it has one).
+ */
+export interface DatatableRowLink {
+  rowId: string;
+  /** The row's first cell, which names it, as its row page's title is taken. */
+  rowLabel: string;
+  /** The row's own page, when it has one (`_page_id`). */
+  rowPageId?: string;
+  /** The column the link is in. */
+  column: string;
+  pageId?: string;
+  targetBlockId?: string;
+  targetRowId?: string;
+  /** For a link in a cell: the cell's text before it and after it, and a text link's own words. */
+  before?: string;
+  after?: string;
+  linkText?: string;
 }
 
 /**
