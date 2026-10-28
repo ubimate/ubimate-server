@@ -16,6 +16,7 @@ import { requireAuth } from '../middleware/auth';
 import { registryStmts, resolvePrimaryWorkspaceId } from '../db/registry';
 import { relay } from '../relay';
 import { addDocumentEventClient, broadcastContentChanged, broadcastTreeChanged } from '../lib/documentEvents';
+import { forgetUpload } from '../lib/quota';
 
 const DATA_DIR = process.env.DATA_DIR ?? path.join(__dirname, '../../data');
 
@@ -221,6 +222,8 @@ documentsRouter.put('/:id', (req: Request, res: Response) => {
               console.error(`[uploads] Failed to delete replaced file ${filePath}:`, err.message);
             }
           });
+          // Its bytes are the account's to use again (docs/DISK-QUOTAS.md §4.4).
+          forgetUpload(req.userId, filename);
         }
       }
     } catch {
@@ -656,6 +659,8 @@ documentsRouter.delete('/:id', (req: Request, res: Response) => {
           console.error(`[uploads] Failed to delete ${filePath}:`, err.message);
         }
       });
+      // Its bytes are the account's to use again (docs/DISK-QUOTAS.md §4.4).
+      forgetUpload(req.userId, filename);
     } catch {
       // Malformed URL or JSON — skip silently.
     }

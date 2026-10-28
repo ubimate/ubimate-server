@@ -8,12 +8,14 @@ import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import { documentsRouter } from './routes/documents';
 import { uploadsRouter } from './routes/uploads';
+import { usageRouter } from './routes/usage';
 import { authRouter } from './routes/auth';
 import { unfurlRouter } from './routes/unfurl';
 import { adminRouter } from './routes/admin';
 import { workspacesRouter } from './routes/workspaces';
 import { demoRouter, scheduleDemoCleanup } from './routes/demo';
 import { healthRouter } from './routes/health';
+import { scheduleUsageReconcile } from './lib/quota';
 import { requireAuth } from './middleware/auth';
 import { relay } from './relay';
 
@@ -124,6 +126,7 @@ app.use('/api/admin', adminRouter);
 app.use('/api/demo', demoRouter);
 app.use('/api/documents', documentsRouter);
 app.use('/api/uploads', uploadsRouter);
+app.use('/api/usage', usageRouter);
 app.use('/api/unfurl', unfurlRouter);
 app.use('/api/workspaces', workspacesRouter);
 
@@ -258,4 +261,5 @@ server.listen(API_PORT, () => {
   console.log(`[app]   listening on http://localhost:${API_PORT}`);
   console.log(`[app]   REST API at /api, WebSocket at /yjs`);
   scheduleDemoCleanup();
+  scheduleUsageReconcile();
 });

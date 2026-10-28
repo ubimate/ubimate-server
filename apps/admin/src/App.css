@@ -38,3 +38,7 @@
   max-width: 280px;
   display: inline-block;
 }
+
+.admin-quota {
+  min-width: 160px;
+}

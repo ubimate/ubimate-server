@@ -88,6 +88,7 @@ describe('auth router', () => {
     delete process.env.JWT_SECRET;
     delete process.env.REQUIRE_INVITATION;
     delete process.env.NODE_ENV;
+    delete process.env.NEW_ACCOUNT_DISK_QUOTA_BYTES;
     vi.resetModules();
   });
 
@@ -117,7 +118,8 @@ describe('auth router', () => {
       workspace_keys: { workspace_id: string; wrapped_key: string }[];
     };
     expect(registerBody.user.email).toBe(email);
-    expect(registerBody.user.properties).toEqual({ name: 'Alice Example' });
+    // A new account starts with a 10 GiB attachment limit (docs/DISK-QUOTAS.md §4.3).
+    expect(registerBody.user.properties).toEqual({ name: 'Alice Example', service: { diskQuotaBytes: 10737418240 } });
     expect(registerBody.user.public_key).toBe(keypair.publicKeyBase64);
     // The initial workspace is the protected "home" workspace.
     expect(registerBody.user.primary_workspace_id).toBe(initialWorkspaceId);
@@ -133,7 +135,7 @@ describe('auth router', () => {
     expect(userRow?.status).toBe('active');
     // The contact address starts as the login email.
     expect(userRow?.contact_email).toBe(email);
-    expect(parseUserProperties(userRow as never)).toEqual({ name: 'Alice Example' });
+    expect(parseUserProperties(userRow as never)).toEqual({ name: 'Alice Example', service: { diskQuotaBytes: 10737418240 } });
     expect(userRow?.public_key).toBe(keypair.publicKeyBase64);
     const wsKeys = registryStmts.listWorkspaceKeysForUser.all(registerBody.user.id) as { wrapped_key: string }[];
     expect(wsKeys[0]?.wrapped_key).toBe('wrapped-key-base64');
@@ -620,5 +622,57 @@ describe('auth router', () => {
       body: JSON.stringify({ token: resetToken, new_password: 'irrelevant', confirm_wipe: true }),
     });
     expect(confirmRes.status).toBe(410);
+  });
+
+  describe('the attachment limit a new account starts with', () => {
+    async function registerAlice(): Promise<{ id: string; stored: Record<string, unknown> }> {
+      const res = await fetch(`${baseUrl}/api/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: 'alice@example.com',
+          name: 'Alice Example',
+          invitationToken: 'invite-token-123',
+          publicKey: generateTestKeypair().publicKeyBase64,
+          initialWorkspaceId: randomUUID(),
+          initialWrappedWorkspaceKey: 'wrapped-key-base64',
+          initialWorkspaceProperties: JSON.stringify({ _enc: 'x' }),
+        }),
+      });
+      expect(res.status).toBe(201);
+      const { user } = await res.json() as { user: { id: string } };
+      const { registryStmts, parseUserProperties } = await import('../db/registry');
+      const row = registryStmts.getUserById.get(user.id) as never;
+      return { id: user.id, stored: parseUserProperties(row) };
+    }
+
+    it('is 10 GiB by default', async () => {
+      expect((await registerAlice()).stored.service).toEqual({ diskQuotaBytes: 10 * 1024 ** 3 });
+    });
+
+    it('is what the server is set to, in bytes', async () => {
+      process.env.NEW_ACCOUNT_DISK_QUOTA_BYTES = '5368709120';
+      expect((await registerAlice()).stored).toEqual({ name: 'Alice Example', service: { diskQuotaBytes: 5368709120 } });
+    });
+
+    it('is none when the server is set to unlimited, and the rest of the properties are as before', async () => {
+      process.env.NEW_ACCOUNT_DISK_QUOTA_BYTES = 'Unlimited';
+      expect((await registerAlice()).stored).toEqual({ name: 'Alice Example' });
+    });
+
+    it('is the default when the setting is neither a number nor unlimited, and says so', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      process.env.NEW_ACCOUNT_DISK_QUOTA_BYTES = 'lots';
+      expect((await registerAlice()).stored.service).toEqual({ diskQuotaBytes: 10 * 1024 ** 3 });
+      expect(warn.mock.calls.some((c) => String(c[0]).includes('NEW_ACCOUNT_DISK_QUOTA_BYTES'))).toBe(true);
+      warn.mockRestore();
+    });
+
+    it('is read by the quota code as the account\'s limit', async () => {
+      const { id } = await registerAlice();
+      const { registryStmts } = await import('../db/registry');
+      const { getQuotaBytes } = await import('../lib/quota');
+      expect(getQuotaBytes(registryStmts.getUserById.get(id) as never)).toBe(10 * 1024 ** 3);
+    });
   });
 });

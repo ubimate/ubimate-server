@@ -10,6 +10,7 @@ import { getUserDb } from '../db/userDb';
 import { issueCaptchaChallenge, verifyCaptchaPayload } from '../lib/captcha';
 import type { AuthPayload } from '@ubimate/types';
 import { trackEvent } from '../analytics';
+import { newAccountDiskQuotaBytes, withDiskQuota } from '../lib/quota';
 
 export const authRouter = Router();
 
@@ -261,7 +262,11 @@ authRouter.post('/register', authLimiter, async (req: Request, res: Response) =>
   const userId = randomUUID();
   const now = Date.now();
 
-  const properties: Record<string, unknown> = name?.trim() ? { name: name.trim() } : {};
+  let properties: Record<string, unknown> = name?.trim() ? { name: name.trim() } : {};
+  // A new account starts with an attachment limit; an account made before there was one has none
+  // (docs/DISK-QUOTAS.md §4.3). Only the server writes it.
+  const startingQuota = newAccountDiskQuotaBytes();
+  if (startingQuota !== null) properties = withDiskQuota(properties, startingQuota);
   registryStmts.createUser.run({
     id: userId,
     email: normalizedEmail,

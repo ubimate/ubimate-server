@@ -15,8 +15,9 @@ import {
   ADMIN_TOKEN_EXPIRES_IN,
 } from '../middleware/adminAuth';
 import { registryStmts, getUserType } from '../db/registry';
-import type { InvitationRow } from '../db/registry';
+import type { InvitationRow, UserRow } from '../db/registry';
 import { sendActivationEmail, smtpConfigured } from '../email';
+import { getQuotaBytes, isValidQuotaBytes, listUsageByUser, withDiskQuota } from '../lib/quota';
 
 const DATA_DIR = process.env.DATA_DIR ?? path.join(__dirname, '../../data');
 const INVITATION_TTL_MS = (Number(process.env.INVITATION_TTL_DAYS) || 7) * 24 * 60 * 60 * 1000;
@@ -112,6 +113,8 @@ adminRouter.get('/users', (_req: Request, res: Response) => {
     user_type: string;
   }[];
 
+  const usage = listUsageByUser();
+
   const users = rows.map((row) => {
     let diskUsageBytes = 0;
 
@@ -157,6 +160,11 @@ adminRouter.get('/users', (_req: Request, res: Response) => {
       demo_expires_at: row.demo_expires_at,
       has_freetrial: row.freetrial_token !== null,
       user_type: row.user_type,
+      // Storage quota (docs/DISK-QUOTAS.md): the limit, null when unlimited, and the usage as last
+      // reconciled, null for an account that has not been reconciled yet.
+      quota_bytes: getQuotaBytes({ id: row.id, properties: row.properties }),
+      attachments_used_bytes: usage.get(row.id)?.attachments ?? null,
+      sync_used_bytes: usage.get(row.id)?.sync ?? null,
     };
   });
 
@@ -191,6 +199,52 @@ adminRouter.delete('/users/:id', (req: Request, res: Response) => {
   trackEvent('user-deleted', { type: getUserType(row) });
 
   res.status(204).send();
+});
+
+// ---------------------------------------------------------------------------
+// PATCH /api/admin/users/:id/service
+//
+// Sets or clears the user's attachment quota (docs/DISK-QUOTAS.md §4.3, §6). Body:
+// { diskQuotaBytes: number | null } — null removes the limit. Merges into `properties`; nothing else
+// in it, and nothing else in `service`, is touched.
+// ---------------------------------------------------------------------------
+adminRouter.patch('/users/:id/service', (req: Request, res: Response) => {
+  const body = req.body as { diskQuotaBytes?: unknown } | undefined;
+  if (!body || typeof body !== 'object' || !('diskQuotaBytes' in body)) {
+    res.status(400).json({ error: 'diskQuotaBytes is required (a number of bytes, or null for unlimited)' });
+    return;
+  }
+  const next = body.diskQuotaBytes;
+  if (next !== null && !isValidQuotaBytes(next)) {
+    res.status(400).json({ error: 'diskQuotaBytes must be a finite number of at least 0, or null' });
+    return;
+  }
+
+  const row = registryStmts.getUserById.get(req.params.id) as UserRow | undefined;
+  if (!row) {
+    res.status(404).json({ error: 'User not found' });
+    return;
+  }
+
+  // Never rewrite a properties blob that cannot be read: it would lose whatever it holds.
+  let properties: Record<string, unknown>;
+  try {
+    const parsed: unknown = JSON.parse(row.properties);
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('not an object');
+    properties = parsed as Record<string, unknown>;
+  } catch {
+    res.status(409).json({ error: "The user's properties cannot be read, so the quota was not changed" });
+    return;
+  }
+
+  const before = getQuotaBytes(row);
+  registryStmts.updateUserProperties.run({ id: row.id, properties: JSON.stringify(withDiskQuota(properties, next)) });
+
+  // The analytics event carries no user id, as the others do not; the server log names both.
+  console.log(`[admin] quota of ${row.id} changed by ${getAdminIdentity().username}: ${before ?? 'unlimited'} -> ${next ?? 'unlimited'}`);
+  trackEvent('quota-changed', { type: getUserType(row), from: before === null ? 'unlimited' : 'limited', to: next === null ? 'unlimited' : 'limited' });
+
+  res.json({ quota_bytes: next });
 });
 
 // ---------------------------------------------------------------------------

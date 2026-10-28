@@ -174,6 +174,41 @@ registryDb.exec(`
 `);
 
 // ---------------------------------------------------------------------------
+// Storage usage and the attachment ledger (docs/DISK-QUOTAS.md §3)
+// ---------------------------------------------------------------------------
+
+// One row per account and kind. `used_bytes` moves by the size of each upload and delete, and is set
+// absolutely only by the reconcile job (lib/quota.ts). Bytes promised to uploads in flight are held
+// in memory there, not here: a crash must not leave a reservation behind.
+registryDb.exec(`
+  CREATE TABLE IF NOT EXISTS usage (
+    user_id        TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    kind           TEXT    NOT NULL CHECK (kind IN ('attachments', 'sync')),
+    used_bytes     INTEGER NOT NULL DEFAULT 0,
+    updated_at     INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, kind)
+  );
+`);
+
+// One row per stored upload. A file is identified as its URL is, `/uploads/<uploader>/<file_id>`:
+// by the uploader's directory and its name there (a random uuid plus extension). The owner is the
+// account charged; until sharing exists that is the uploader.
+registryDb.exec(`
+  CREATE TABLE IF NOT EXISTS attachments (
+    uploader_user_id TEXT    NOT NULL,
+    file_id          TEXT    NOT NULL,
+    workspace_id     TEXT    NOT NULL DEFAULT '',
+    owner_user_id    TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    size_bytes       INTEGER NOT NULL,
+    created_at       INTEGER NOT NULL,
+    PRIMARY KEY (uploader_user_id, file_id)
+  );
+`);
+registryDb.exec(`
+  CREATE INDEX IF NOT EXISTS idx_attachments_owner ON attachments(owner_user_id);
+`);
+
+// ---------------------------------------------------------------------------
 // Credential reset tokens
 // ---------------------------------------------------------------------------
 
@@ -299,6 +334,7 @@ export const registryStmts = {
     WHERE id = @id
   `),
   deleteUser: registryDb.prepare(`DELETE FROM users WHERE id = ?`),
+  updateUserProperties: registryDb.prepare(`UPDATE users SET properties = @properties WHERE id = @id`),
   listUsers: registryDb.prepare(`SELECT id, email, properties, status, created_at, is_demo, demo_expires_at, freetrial_token, user_type FROM users`),
 
   // Workspace keys
@@ -322,6 +358,44 @@ export const registryStmts = {
   `),
   deleteWorkspaceKeyForUser: registryDb.prepare(`
     DELETE FROM workspace_keys WHERE workspace_id = ? AND user_id = ?
+  `),
+
+  // Storage usage and the attachment ledger
+  listUsage: registryDb.prepare(`SELECT user_id, kind, used_bytes, updated_at FROM usage`),
+  getUsageRow: registryDb.prepare(`SELECT used_bytes FROM usage WHERE user_id = ? AND kind = ?`),
+  setUsedBytes: registryDb.prepare(`
+    INSERT INTO usage (user_id, kind, used_bytes, updated_at)
+    VALUES (@user_id, @kind, @used_bytes, @updated_at)
+    ON CONFLICT(user_id, kind) DO UPDATE SET used_bytes = excluded.used_bytes, updated_at = excluded.updated_at
+  `),
+  addUsedBytes: registryDb.prepare(`
+    INSERT INTO usage (user_id, kind, used_bytes, updated_at)
+    VALUES (@user_id, @kind, MAX(0, @delta), @updated_at)
+    ON CONFLICT(user_id, kind) DO UPDATE SET used_bytes = MAX(0, used_bytes + @delta), updated_at = excluded.updated_at
+  `),
+  getAttachment: registryDb.prepare(`
+    SELECT file_id, workspace_id, owner_user_id, uploader_user_id, size_bytes FROM attachments
+    WHERE uploader_user_id = ? AND file_id = ?
+  `),
+  listAttachmentsForOwner: registryDb.prepare(`
+    SELECT file_id, workspace_id, owner_user_id, uploader_user_id, size_bytes FROM attachments WHERE owner_user_id = ?
+  `),
+  listAttachmentsByUploader: registryDb.prepare(`
+    SELECT file_id, workspace_id, size_bytes FROM attachments WHERE uploader_user_id = ?
+  `),
+  insertAttachment: registryDb.prepare(`
+    INSERT OR IGNORE INTO attachments (file_id, workspace_id, owner_user_id, uploader_user_id, size_bytes, created_at)
+    VALUES (@file_id, @workspace_id, @owner_user_id, @uploader_user_id, @size_bytes, @created_at)
+  `),
+  updateAttachmentSize: registryDb.prepare(`
+    UPDATE attachments SET size_bytes = @size_bytes WHERE uploader_user_id = @uploader_user_id AND file_id = @file_id
+  `),
+  setAttachmentWorkspace: registryDb.prepare(`
+    UPDATE attachments SET workspace_id = @workspace_id WHERE uploader_user_id = @uploader_user_id AND file_id = @file_id
+  `),
+  deleteAttachment: registryDb.prepare(`DELETE FROM attachments WHERE uploader_user_id = ? AND file_id = ?`),
+  sumAttachmentsForOwner: registryDb.prepare(`
+    SELECT COALESCE(SUM(size_bytes), 0) AS total FROM attachments WHERE owner_user_id = ?
   `),
 
   // Invitations

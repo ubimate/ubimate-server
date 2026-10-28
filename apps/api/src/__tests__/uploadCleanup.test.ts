@@ -310,4 +310,76 @@ describe('deleting documents — uploaded files', () => {
     await settle();
     expect(fs.existsSync(old.filePath)).toBe(false);
   });
+
+  // -------------------------------------------------------------------------
+  // The account's storage use follows the files that go (docs/DISK-QUOTAS.md §4.4)
+  // -------------------------------------------------------------------------
+
+  describe('the storage an account uses', () => {
+    /** The account, as the registry knows it, with what it holds measured. */
+    async function measured() {
+      const registry = await import('../db/registry');
+      registry.registryStmts.createUser.run({
+        id: TEST_USER_ID, email: 'cleanup@example.com', properties: '{}', created_at: Date.now(),
+        status: 'active', public_key: null, wrapped_content_key: null, user_type: 'free',
+      });
+      const quota = await import('../lib/quota');
+      return {
+        measure: () => quota.reconcileUserUsage(TEST_USER_ID),
+        used: () => quota.listUsageByUser().get(TEST_USER_ID)?.attachments ?? 0,
+        ledger: () => registry.registryStmts.listAttachmentsForOwner.all(TEST_USER_ID) as { file_id: string }[],
+      };
+    }
+
+    it('is given back when a deleted row\'s file is removed, and the ledger forgets it', async () => {
+      const account = await measured();
+      const { space, media } = await spaceWithMedia();
+      const kept = seedFile('png');
+      const gone = seedFile('png');
+      await create('image', { src: kept.url }, media);
+      const { space: other, media: otherMedia } = await spaceWithMedia();
+      await create('image', { src: gone.url }, otherMedia);
+      account.measure();
+      const both = fs.statSync(kept.filePath).size + fs.statSync(gone.filePath).size;
+      expect(account.used()).toBe(both);
+      expect(account.ledger()).toHaveLength(2);
+
+      expect((await del(other)).ok).toBe(true);
+      await settle();
+      expect(account.used()).toBe(fs.statSync(kept.filePath).size);
+      expect(account.ledger().map((r) => r.file_id)).toEqual([kept.name]);
+      void space;
+    });
+
+    it('is given back when a row\'s src is replaced and the old file is removed', async () => {
+      const account = await measured();
+      const { media } = await spaceWithMedia();
+      const old = seedFile('png');
+      const id = await create('image', { src: old.path }, media);
+      account.measure();
+      expect(account.used()).toBeGreaterThan(0);
+
+      const res = await fetch(`${baseUrl}/api/documents/${id}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ properties: { src: 'https://example.test/x.png' } }),
+      });
+      expect(res.ok).toBe(true);
+      await settle();
+      expect(fs.existsSync(old.filePath)).toBe(false);
+      expect(account.used()).toBe(0);
+    });
+
+    it('does not go below zero when a file the ledger never held is removed', async () => {
+      const account = await measured();
+      const { space, media } = await spaceWithMedia();
+      await create('image', { src: seedFile('png').url }, media);
+      account.measure();
+      // The count is made wrong on purpose, as a crash between a delete and the ledger could leave it.
+      const registry = await import('../db/registry');
+      registry.registryStmts.setUsedBytes.run({ user_id: TEST_USER_ID, kind: 'attachments', used_bytes: 1, updated_at: 1 });
+      expect((await del(space)).ok).toBe(true);
+      await settle();
+      expect(account.used()).toBe(0);
+    });
+  });
 });
+

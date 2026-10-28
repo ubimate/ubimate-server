@@ -2,11 +2,16 @@ import {
   Alert,
   Button,
   Card,
+  Checkbox,
   Form,
   Input,
+  InputNumber,
   Modal,
+  Progress,
   Radio,
+  Select,
   Space,
+  Switch,
   Table,
   Tag,
   Tooltip,
@@ -33,6 +38,11 @@ interface AdminUser {
   demo_expires_at: number | null;
   has_freetrial: boolean;
   user_type: string;
+  /** Attachment limit in bytes; null when unlimited (docs/DISK-QUOTAS.md). */
+  quota_bytes: number | null;
+  /** Usage as last reconciled by the server; null for an account not yet measured. */
+  attachments_used_bytes: number | null;
+  sync_used_bytes: number | null;
 }
 
 type UserTypeFilter = 'all' | 'real' | 'demo' | 'freetrial';
@@ -142,7 +152,22 @@ function useAdminApi(baseUrl: string, token: string | null) {
     [baseUrl, headers],
   );
 
-  return { login, fetchUsers, fetchInvitations, createInvitation, deleteInvitation, deleteUser };
+  const setDiskQuota = useCallback(
+    async (id: string, bytes: number | null): Promise<void> => {
+      const res = await fetch(`${baseUrl}/api/admin/users/${id}/service`, {
+        method: 'PATCH',
+        headers: headers(),
+        body: JSON.stringify({ diskQuotaBytes: bytes }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error((body as { error?: string }).error ?? `Failed to set the limit (${res.status})`);
+      }
+    },
+    [baseUrl, headers],
+  );
+
+  return { login, fetchUsers, fetchInvitations, createInvitation, deleteInvitation, deleteUser, setDiskQuota };
 }
 
 // ---------------------------------------------------------------------------
@@ -152,9 +177,18 @@ function useAdminApi(baseUrl: string, token: string | null) {
 function formatBytes(bytes: number): string {
   if (bytes === 0) return '0 B';
   const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(k)), sizes.length - 1);
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
+}
+
+const QUOTA_UNITS = { MB: 1024 ** 2, GB: 1024 ** 3 } as const;
+type QuotaUnit = keyof typeof QUOTA_UNITS;
+
+/** Share of the limit used, 0 to 1 and beyond; null when there is no limit or no measurement. */
+function quotaFraction(u: AdminUser): number | null {
+  if (u.quota_bytes === null || u.attachments_used_bytes === null) return null;
+  return u.quota_bytes === 0 ? (u.attachments_used_bytes > 0 ? Infinity : 0) : u.attachments_used_bytes / u.quota_bytes;
 }
 
 function formatDate(ms: number): string {
@@ -253,6 +287,12 @@ const AdminDashboard: React.FC<{ api: ReturnType<typeof useAdminApi>; onLogout: 
   const [inviteModalOpen, setInviteModalOpen] = useState(false);
   const [inviteLoading, setInviteLoading] = useState(false);
   const [inviteForm] = Form.useForm();
+  const [overEightyOnly, setOverEightyOnly] = useState(false);
+  const [quotaUser, setQuotaUser] = useState<AdminUser | null>(null);
+  const [quotaUnlimited, setQuotaUnlimited] = useState(true);
+  const [quotaAmount, setQuotaAmount] = useState<number | null>(10);
+  const [quotaUnit, setQuotaUnit] = useState<QuotaUnit>('GB');
+  const [quotaSaving, setQuotaSaving] = useState(false);
   const [messageApi, contextHolder] = message.useMessage();
 
   const loadUsers = useCallback(async () => {
@@ -329,7 +369,45 @@ const AdminDashboard: React.FC<{ api: ReturnType<typeof useAdminApi>; onLogout: 
     });
   }
 
+  function openQuotaModal(user: AdminUser) {
+    setQuotaUser(user);
+    setQuotaUnlimited(user.quota_bytes === null);
+    if (user.quota_bytes === null) {
+      setQuotaAmount(10);
+      setQuotaUnit('GB');
+    } else if (user.quota_bytes > 0 && user.quota_bytes % QUOTA_UNITS.GB === 0) {
+      setQuotaAmount(user.quota_bytes / QUOTA_UNITS.GB);
+      setQuotaUnit('GB');
+    } else {
+      setQuotaAmount(parseFloat((user.quota_bytes / QUOTA_UNITS.MB).toFixed(2)));
+      setQuotaUnit('MB');
+    }
+  }
+
+  /** The limit the modal would save: null for unlimited, undefined while the amount is not usable. */
+  const quotaToSave: number | null | undefined = quotaUnlimited
+    ? null
+    : quotaAmount === null || !Number.isFinite(quotaAmount) || quotaAmount < 0
+      ? undefined
+      : Math.round(quotaAmount * QUOTA_UNITS[quotaUnit]);
+
+  async function handleSaveQuota() {
+    if (!quotaUser || quotaToSave === undefined) return;
+    setQuotaSaving(true);
+    try {
+      await api.setDiskQuota(quotaUser.id, quotaToSave);
+      messageApi.success(quotaToSave === null ? `${quotaUser.email} is now unlimited` : `Limit of ${quotaUser.email} set to ${formatBytes(quotaToSave)}`);
+      setQuotaUser(null);
+      void loadUsers();
+    } catch (err) {
+      messageApi.error(err instanceof Error ? err.message : 'Failed to set the limit');
+    } finally {
+      setQuotaSaving(false);
+    }
+  }
+
   const filteredUsers = users.filter((u) => {
+    if (overEightyOnly && !((quotaFraction(u) ?? 0) >= 0.8)) return false;
     if (userTypeFilter === 'real')      return !u.is_demo;
     if (userTypeFilter === 'demo')      return u.user_type === 'demo';
     if (userTypeFilter === 'freetrial') return u.user_type === 'trial';
@@ -383,6 +461,36 @@ const AdminDashboard: React.FC<{ api: ReturnType<typeof useAdminApi>; onLogout: 
       sorter: (a: AdminUser, b: AdminUser) => a.disk_usage_bytes - b.disk_usage_bytes,
     },
     {
+      title: 'Attachment limit',
+      key: 'quota',
+      render: (_: unknown, record: AdminUser) => {
+        const used = record.attachments_used_bytes;
+        const detail = used === null
+          ? 'Not measured yet'
+          : `Attachments ${formatBytes(used)}, sync ${formatBytes(record.sync_used_bytes ?? 0)}`;
+        if (record.quota_bytes === null) {
+          return <Tooltip title={detail}><Text type="secondary">{used === null ? 'unlimited' : `${formatBytes(used)}, unlimited`}</Text></Tooltip>;
+        }
+        const fraction = quotaFraction(record) ?? 0;
+        return (
+          <Tooltip title={detail}>
+            <div className="admin-quota">
+              <Progress
+                percent={Math.min(100, Math.round(fraction * 100))}
+                size="small"
+                showInfo={false}
+                status={fraction >= 1 ? 'exception' : 'normal'}
+                strokeColor={fraction >= 1 ? undefined : fraction >= 0.8 ? '#faad14' : undefined}
+              />
+              <Text type="secondary">{used === null ? '—' : formatBytes(used)} / {formatBytes(record.quota_bytes)}</Text>
+            </div>
+          </Tooltip>
+        );
+      },
+      // Unlimited and unmeasured accounts sort below every limited one.
+      sorter: (a: AdminUser, b: AdminUser) => (quotaFraction(a) ?? -1) - (quotaFraction(b) ?? -1),
+    },
+    {
       title: 'Registered',
       dataIndex: 'created_at',
       key: 'created_at',
@@ -393,9 +501,14 @@ const AdminDashboard: React.FC<{ api: ReturnType<typeof useAdminApi>; onLogout: 
       title: '',
       key: 'actions',
       render: (_: unknown, record: AdminUser) => (
-        <Button type="link" danger size="small" onClick={() => confirmDeleteUser(record)}>
-          Delete
-        </Button>
+        <Space size={0}>
+          <Button type="link" size="small" onClick={() => openQuotaModal(record)}>
+            Set limit
+          </Button>
+          <Button type="link" danger size="small" onClick={() => confirmDeleteUser(record)}>
+            Delete
+          </Button>
+        </Space>
       ),
     },
   ];
@@ -470,6 +583,10 @@ const AdminDashboard: React.FC<{ api: ReturnType<typeof useAdminApi>; onLogout: 
         title="Users"
         className="admin-section"
         extra={
+          <Space>
+          <Checkbox checked={overEightyOnly} onChange={(e) => setOverEightyOnly(e.target.checked)}>
+            Over 80% of the limit
+          </Checkbox>
           <Radio.Group
             value={userTypeFilter}
             onChange={(e) => setUserTypeFilter(e.target.value as UserTypeFilter)}
@@ -480,6 +597,7 @@ const AdminDashboard: React.FC<{ api: ReturnType<typeof useAdminApi>; onLogout: 
             <Radio.Button value="demo">Demo ({users.filter(u => u.is_demo).length})</Radio.Button>
             <Radio.Button value="freetrial">Free trial ({users.filter(u => u.is_demo && u.has_freetrial).length})</Radio.Button>
           </Radio.Group>
+          </Space>
         }
       >
         <Table
@@ -510,6 +628,47 @@ const AdminDashboard: React.FC<{ api: ReturnType<typeof useAdminApi>; onLogout: 
           size="small"
         />
       </Card>
+
+      <Modal
+        title={quotaUser ? `Attachment limit: ${quotaUser.email}` : 'Attachment limit'}
+        open={quotaUser !== null}
+        onCancel={() => setQuotaUser(null)}
+        onOk={() => void handleSaveQuota()}
+        okText="Save"
+        okButtonProps={{ disabled: quotaToSave === undefined }}
+        confirmLoading={quotaSaving}
+        destroyOnClose
+      >
+        <Space direction="vertical" style={{ width: '100%' }}>
+          <Space>
+            <Switch checked={quotaUnlimited} onChange={setQuotaUnlimited} />
+            <Text>Unlimited</Text>
+          </Space>
+          <Space>
+            <InputNumber
+              min={0}
+              value={quotaAmount}
+              onChange={setQuotaAmount}
+              disabled={quotaUnlimited}
+              style={{ width: 140 }}
+            />
+            <Select
+              value={quotaUnit}
+              onChange={setQuotaUnit}
+              disabled={quotaUnlimited}
+              options={[{ value: 'MB', label: 'MB' }, { value: 'GB', label: 'GB' }]}
+              style={{ width: 80 }}
+            />
+          </Space>
+          {quotaUser && typeof quotaToSave === 'number' && quotaUser.attachments_used_bytes !== null && quotaToSave < quotaUser.attachments_used_bytes && (
+            <Alert
+              type="warning"
+              showIcon
+              message={`They use ${formatBytes(quotaUser.attachments_used_bytes)} already. They keep what they have and cannot add more.`}
+            />
+          )}
+        </Space>
+      </Modal>
 
       <Modal
         title="Send invitation"

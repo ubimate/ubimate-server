@@ -8,6 +8,7 @@
  * GET  /api/admin/me           — returns admin identity
  * GET  /api/admin/users        — lists registered users with disk usage
  * DELETE /api/admin/users/:id  — deletes a user and writes a tombstone
+ * PATCH /api/admin/users/:id/service — sets or clears the user's attachment quota
  */
 
 import express from 'express';
@@ -264,5 +265,128 @@ describe('admin router', () => {
       headers: { Authorization: `Bearer ${adminToken}` },
     });
     expect(res.status).toBe(404);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Storage quota — docs/DISK-QUOTAS.md §6
+  // ---------------------------------------------------------------------------
+
+  describe('storage quota', () => {
+    async function addUser(properties: unknown = {}): Promise<string> {
+      const { registryStmts } = await import('../db/registry');
+      const id = randomUUID();
+      registryStmts.createUser.run({
+        id,
+        email: `${id}@example.com`,
+        properties: typeof properties === 'string' ? properties : JSON.stringify(properties),
+        created_at: Date.now(),
+        status: 'active',
+        public_key: null,
+        wrapped_content_key: null,
+        user_type: 'free',
+      });
+      return id;
+    }
+
+    const patch = (id: string, body: unknown, token: string | null = adminToken) =>
+      fetch(`${baseUrl}/api/admin/users/${id}/service`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify(body),
+      });
+
+    const listed = async (id: string) => {
+      const res = await fetch(`${baseUrl}/api/admin/users`, { headers: { Authorization: `Bearer ${adminToken}` } });
+      const users = await res.json() as {
+        id: string; properties: Record<string, unknown>;
+        quota_bytes: number | null; attachments_used_bytes: number | null; sync_used_bytes: number | null;
+      }[];
+      return users.find((u) => u.id === id)!;
+    };
+
+    it('lists an account with no limit as unlimited and not yet measured', async () => {
+      const id = await addUser();
+      const u = await listed(id);
+      expect(u.quota_bytes).toBeNull();
+      expect(u.attachments_used_bytes).toBeNull();
+      expect(u.sync_used_bytes).toBeNull();
+    });
+
+    it('lists the limit and the reconciled usage', async () => {
+      const id = await addUser({ service: { diskQuotaBytes: 1000 } });
+      fs.mkdirSync(path.join(tmpDir, 'uploads', id), { recursive: true });
+      fs.writeFileSync(path.join(tmpDir, 'uploads', id, 'a.enc'), Buffer.alloc(300));
+      const { reconcileUserUsage } = await import('../lib/quota');
+      reconcileUserUsage(id);
+
+      const u = await listed(id);
+      expect(u.quota_bytes).toBe(1000);
+      expect(u.attachments_used_bytes).toBe(300);
+      expect(u.sync_used_bytes).toBe(0);
+    });
+
+    it('sets the limit, and the account lists with it', async () => {
+      const id = await addUser({ name: 'Alice' });
+      const res = await patch(id, { diskQuotaBytes: 10737418240 });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ quota_bytes: 10737418240 });
+
+      const u = await listed(id);
+      expect(u.quota_bytes).toBe(10737418240);
+      expect(u.properties).toEqual({ name: 'Alice', service: { diskQuotaBytes: 10737418240 } });
+    });
+
+    it('keeps the rest of properties and of service when it changes the limit', async () => {
+      const id = await addUser({ name: 'Alice', theme: 'dark', service: { diskQuotaBytes: 5, other: 'kept' } });
+      expect((await patch(id, { diskQuotaBytes: 9 })).status).toBe(200);
+      expect((await listed(id)).properties).toEqual({ name: 'Alice', theme: 'dark', service: { diskQuotaBytes: 9, other: 'kept' } });
+    });
+
+    it('removes the limit with null, and the account is unlimited again', async () => {
+      const id = await addUser({ name: 'Alice', service: { diskQuotaBytes: 5 } });
+      const res = await patch(id, { diskQuotaBytes: null });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ quota_bytes: null });
+      const u = await listed(id);
+      expect(u.quota_bytes).toBeNull();
+      expect(u.properties).toEqual({ name: 'Alice' });
+    });
+
+    it('accepts a limit of zero', async () => {
+      const id = await addUser();
+      expect((await patch(id, { diskQuotaBytes: 0 })).status).toBe(200);
+      expect((await listed(id)).quota_bytes).toBe(0);
+    });
+
+    it('refuses a value that is not a number of at least zero, and changes nothing', async () => {
+      const id = await addUser({ service: { diskQuotaBytes: 5 } });
+      for (const bad of [-1, '10GB', true, [], {}, undefined]) {
+        const res = await patch(id, { diskQuotaBytes: bad });
+        expect(res.status, JSON.stringify(bad)).toBe(400);
+      }
+      expect((await patch(id, {})).status).toBe(400);
+      expect((await listed(id)).quota_bytes).toBe(5);
+    });
+
+    it('returns 404 for an account that does not exist', async () => {
+      expect((await patch(randomUUID(), { diskQuotaBytes: 5 })).status).toBe(404);
+    });
+
+    it('refuses to rewrite properties it cannot read, and leaves them as they were', async () => {
+      const id = await addUser('this is not json');
+      const res = await patch(id, { diskQuotaBytes: 5 });
+      expect(res.status).toBe(409);
+      const { registryStmts } = await import('../db/registry');
+      expect((registryStmts.getUserById.get(id) as { properties: string }).properties).toBe('this is not json');
+    });
+
+    it('refuses a request without an admin token, and a user token', async () => {
+      const id = await addUser();
+      expect((await patch(id, { diskQuotaBytes: 5 }, null)).status).toBe(401);
+      const jwt = await import('jsonwebtoken');
+      const userToken = jwt.sign({ sub: id, email: 'user@example.com' }, 'test-jwt-secret', { expiresIn: '1h' });
+      expect((await patch(id, { diskQuotaBytes: 5 }, userToken)).status).toBe(401);
+      expect((await listed(id)).quota_bytes).toBeNull();
+    });
   });
 });
