@@ -88,6 +88,32 @@ export interface WorkspaceKeyRow {
   granted_at: number;
 }
 
+export type AttachmentKind = 'image' | 'video' | 'audio' | 'file';
+
+export interface AttachmentRow {
+  attachment_id: string;
+  workspace_id: string;
+  uploader_user_id: string;
+  owner_user_id: string;
+  kind: AttachmentKind;
+  status: 'pending' | 'confirmed' | 'deleted';
+  storage: 'local' | 's3';
+  storage_key: string;
+  key_version: number;
+  wrapped_key: string;
+  expected_size: number;
+  size_bytes: number | null;
+  created_at: number;
+}
+
+/**
+ * The version of a Space's key that new content is written under. Every Space is at version 1 until
+ * key versions are built (docs/ATTACHMENT-ENCRYPTION.md 5.1, step 5), which gives this a table to read.
+ */
+export function currentKeyVersion(_workspaceId: string): number {
+  return 1;
+}
+
 export interface UserRow {
   id: string;
   email: string;
@@ -174,6 +200,24 @@ registryDb.exec(`
 `);
 
 // ---------------------------------------------------------------------------
+// workspace_key_state — what the server records about a Space beyond its members' keys
+// (docs/ATTACHMENT-ENCRYPTION.md 5.1)
+// ---------------------------------------------------------------------------
+
+// One row per Space put on the server, written when its first key is. `owner_user_id` is the creator
+// (docs/DISK-QUOTAS.md §4.5): the account that wrote the first key row, never changed afterwards. The version
+// and `rotation_pending` are for key rotation (step 5): a Space with no row, and so one made before this
+// table, has no known owner and is at version 1.
+registryDb.exec(`
+  CREATE TABLE IF NOT EXISTS workspace_key_state (
+    workspace_id     TEXT    PRIMARY KEY,
+    current_version  INTEGER NOT NULL DEFAULT 1,
+    rotation_pending INTEGER NOT NULL DEFAULT 0,
+    owner_user_id    TEXT    NOT NULL
+  );
+`);
+
+// ---------------------------------------------------------------------------
 // Storage usage and the attachment ledger (docs/DISK-QUOTAS.md §3)
 // ---------------------------------------------------------------------------
 
@@ -190,22 +234,33 @@ registryDb.exec(`
   );
 `);
 
-// One row per stored upload. A file is identified as its URL is, `/uploads/<uploader>/<file_id>`:
-// by the uploader's directory and its name there (a random uuid plus extension). The owner is the
-// account charged; until sharing exists that is the uploader.
+// One row per attachment (docs/ATTACHMENT-ENCRYPTION.md 5.2). The id is made by the client. `pending`
+// from presign until confirm, which charges `owner_user_id` (the uploader until sharing exists);
+// `deleted` only for an object in a bucket that the cleanup job has yet to remove. The server never
+// sees a name or MIME type, only the coarse `kind`. `wrapped_key` is the attachment's key under the
+// Space key at `key_version`, opaque here.
 registryDb.exec(`
   CREATE TABLE IF NOT EXISTS attachments (
+    attachment_id    TEXT    PRIMARY KEY,
+    workspace_id     TEXT    NOT NULL,
     uploader_user_id TEXT    NOT NULL,
-    file_id          TEXT    NOT NULL,
-    workspace_id     TEXT    NOT NULL DEFAULT '',
     owner_user_id    TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    size_bytes       INTEGER NOT NULL,
-    created_at       INTEGER NOT NULL,
-    PRIMARY KEY (uploader_user_id, file_id)
+    kind             TEXT    NOT NULL CHECK (kind IN ('image', 'video', 'audio', 'file')),
+    status           TEXT    NOT NULL CHECK (status IN ('pending', 'confirmed', 'deleted')),
+    storage          TEXT    NOT NULL CHECK (storage IN ('local', 's3')),
+    storage_key      TEXT    NOT NULL,
+    key_version      INTEGER NOT NULL,
+    wrapped_key      TEXT    NOT NULL,
+    expected_size    INTEGER NOT NULL,
+    size_bytes       INTEGER,
+    created_at       INTEGER NOT NULL
   );
 `);
 registryDb.exec(`
   CREATE INDEX IF NOT EXISTS idx_attachments_owner ON attachments(owner_user_id);
+`);
+registryDb.exec(`
+  CREATE INDEX IF NOT EXISTS idx_attachments_uploader ON attachments(uploader_user_id);
 `);
 
 // ---------------------------------------------------------------------------
@@ -360,6 +415,12 @@ export const registryStmts = {
     DELETE FROM workspace_keys WHERE workspace_id = ? AND user_id = ?
   `),
 
+  // Space ownership. The first account to be given a Space's key owns it; later calls change nothing.
+  recordSpaceOwner: registryDb.prepare(`
+    INSERT OR IGNORE INTO workspace_key_state (workspace_id, owner_user_id) VALUES (@workspace_id, @owner_user_id)
+  `),
+  getSpaceOwner: registryDb.prepare(`SELECT owner_user_id FROM workspace_key_state WHERE workspace_id = ?`),
+
   // Storage usage and the attachment ledger
   listUsage: registryDb.prepare(`SELECT user_id, kind, used_bytes, updated_at FROM usage`),
   getUsageRow: registryDb.prepare(`SELECT used_bytes FROM usage WHERE user_id = ? AND kind = ?`),
@@ -373,29 +434,38 @@ export const registryStmts = {
     VALUES (@user_id, @kind, MAX(0, @delta), @updated_at)
     ON CONFLICT(user_id, kind) DO UPDATE SET used_bytes = MAX(0, used_bytes + @delta), updated_at = excluded.updated_at
   `),
-  getAttachment: registryDb.prepare(`
-    SELECT file_id, workspace_id, owner_user_id, uploader_user_id, size_bytes FROM attachments
-    WHERE uploader_user_id = ? AND file_id = ?
-  `),
-  listAttachmentsForOwner: registryDb.prepare(`
-    SELECT file_id, workspace_id, owner_user_id, uploader_user_id, size_bytes FROM attachments WHERE owner_user_id = ?
-  `),
+  getAttachment: registryDb.prepare(`SELECT * FROM attachments WHERE attachment_id = ?`),
+  // The uploader's own confirmed attachments: what a client compares with the media documents it holds.
   listAttachmentsByUploader: registryDb.prepare(`
-    SELECT file_id, workspace_id, size_bytes FROM attachments WHERE uploader_user_id = ?
+    SELECT attachment_id, workspace_id, size_bytes FROM attachments
+    WHERE uploader_user_id = ? AND status = 'confirmed'
   `),
-  insertAttachment: registryDb.prepare(`
-    INSERT OR IGNORE INTO attachments (file_id, workspace_id, owner_user_id, uploader_user_id, size_bytes, created_at)
-    VALUES (@file_id, @workspace_id, @owner_user_id, @uploader_user_id, @size_bytes, @created_at)
+  insertPendingAttachment: registryDb.prepare(`
+    INSERT INTO attachments (attachment_id, workspace_id, uploader_user_id, owner_user_id, kind, status, storage,
+                             storage_key, key_version, wrapped_key, expected_size, size_bytes, created_at)
+    VALUES (@attachment_id, @workspace_id, @uploader_user_id, @owner_user_id, @kind, 'pending', @storage,
+            @storage_key, @key_version, @wrapped_key, @expected_size, NULL, @created_at)
   `),
-  updateAttachmentSize: registryDb.prepare(`
-    UPDATE attachments SET size_bytes = @size_bytes WHERE uploader_user_id = @uploader_user_id AND file_id = @file_id
+  // A retried presign for the same id: the same row, fresh size, kind, wrapping and place. A row that was
+  // `deleted` and not yet cleaned up (a size mismatch on a bucket, where the API cannot delete) is pending again.
+  refreshPendingAttachment: registryDb.prepare(`
+    UPDATE attachments SET kind = @kind, key_version = @key_version, wrapped_key = @wrapped_key,
+                           expected_size = @expected_size, size_bytes = NULL, created_at = @created_at, status = 'pending',
+                           storage = @storage, storage_key = @storage_key, owner_user_id = @owner_user_id
+    WHERE attachment_id = @attachment_id AND status IN ('pending', 'deleted')
   `),
-  setAttachmentWorkspace: registryDb.prepare(`
-    UPDATE attachments SET workspace_id = @workspace_id WHERE uploader_user_id = @uploader_user_id AND file_id = @file_id
+  confirmAttachment: registryDb.prepare(`
+    UPDATE attachments SET status = 'confirmed', size_bytes = @size_bytes
+    WHERE attachment_id = @attachment_id AND status = 'pending'
   `),
-  deleteAttachment: registryDb.prepare(`DELETE FROM attachments WHERE uploader_user_id = ? AND file_id = ?`),
+  markAttachmentDeleted: registryDb.prepare(`UPDATE attachments SET status = 'deleted' WHERE attachment_id = ?`),
+  deleteAttachment: registryDb.prepare(`DELETE FROM attachments WHERE attachment_id = ?`),
+  listStalePendingAttachments: registryDb.prepare(`
+    SELECT * FROM attachments WHERE status = 'pending' AND created_at < ?
+  `),
+  listDeletedAttachments: registryDb.prepare(`SELECT * FROM attachments WHERE status = 'deleted'`),
   sumAttachmentsForOwner: registryDb.prepare(`
-    SELECT COALESCE(SUM(size_bytes), 0) AS total FROM attachments WHERE owner_user_id = ?
+    SELECT COALESCE(SUM(size_bytes), 0) AS total FROM attachments WHERE owner_user_id = ? AND status = 'confirmed'
   `),
 
   // Invitations

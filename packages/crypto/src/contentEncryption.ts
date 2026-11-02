@@ -1,118 +1,93 @@
 /**
- * Symmetric content encryption using XSalsa20-Poly1305.
+ * Content frames, format 2: Yjs updates, awareness and encrypted properties.
  *
- * Algorithm : libsodium crypto_secretbox_easy (XSalsa20-Poly1305)
- * Key       : 32-byte content key, held in memory for the session
- * Nonce     : 24-byte random nonce generated per encryption operation
- * Wire fmt  : version (1 byte) || nonce (24 bytes) || ciphertext+MAC  (raw Uint8Array)
+ * Algorithm : XChaCha20-Poly1305-IETF (see aead.ts)
+ * Key       : the 32-byte Space key at the version named in the header
+ * Wire fmt  : 0x02 || keyVersion (uint32 BE) || nonce (24) || ciphertext+tag
+ * AD        : the five header bytes (0x02 || keyVersion), so a frame whose version
+ *             bytes were changed does not decrypt
  *
- * The version byte is always WIRE_VERSION (0x01) for the current implementation.
- * Clients MUST refuse to decrypt blobs with an unrecognised version byte and
- * surface a "please update your client" prompt to the user.
+ * Every frame is written this way, at every version, including version 1. There is no
+ * reader for the earlier 0x01 format (docs/ATTACHMENT-ENCRYPTION.md decision 6).
+ * The key version is plaintext metadata.
  *
- * For storage in text columns (e.g. `properties`) callers should base64-encode
- * the result of encrypt() and base64-decode before passing to decrypt().
+ * For storage in text columns (e.g. `properties`) use the String variants, which
+ * base64-encode the frame.
  */
 
 import _sodium from 'libsodium-wrappers-sumo';
+import { aeadDecrypt, aeadEncrypt, assertKey, assertVersion, NONCE_BYTES, TAG_BYTES } from './aead';
+import type { Keyring } from './keyChain';
 
-/** Current wire format version. Increment when the encryption algorithm changes. */
-const WIRE_VERSION = 0x01;
+export const FRAME_FORMAT = 0x02;
+const HEADER_BYTES = 5;
+/** Bytes a frame adds to its plaintext. */
+export const FRAME_OVERHEAD = HEADER_BYTES + NONCE_BYTES + TAG_BYTES;
 
-/** Generate a fresh random 32-byte content key. */
+/** Generate a fresh random 32-byte key (a Space key, or an attachment key). */
 export async function generateContentKey(): Promise<Uint8Array> {
   await _sodium.ready;
-  return _sodium.randombytes_buf(_sodium.crypto_secretbox_KEYBYTES);
+  return _sodium.randombytes_buf(_sodium.crypto_aead_xchacha20poly1305_ietf_KEYBYTES);
+}
+
+/** Encrypt `plaintext` as a format 2 frame under `key`, which is the Space key at `keyVersion`. */
+export async function encryptFrame(
+  plaintext: Uint8Array,
+  key: Uint8Array,
+  keyVersion: number,
+): Promise<Uint8Array> {
+  assertKey(key, 'Content key');
+  assertVersion(keyVersion);
+  const header = new Uint8Array(HEADER_BYTES);
+  header[0] = FRAME_FORMAT;
+  new DataView(header.buffer).setUint32(1, keyVersion, false);
+  const body = await aeadEncrypt(plaintext, key, header);
+  const frame = new Uint8Array(HEADER_BYTES + body.length);
+  frame.set(header);
+  frame.set(body, HEADER_BYTES);
+  return frame;
 }
 
 /**
- * Encrypt plaintext bytes with the content key.
- * Returns version (1 byte) || nonce (24 bytes) || ciphertext+MAC as a single Uint8Array.
+ * The key version a frame names, after checking its format byte and length.
+ * Does not authenticate: the version is only trustworthy once decryptFrame succeeds.
  */
-export async function encrypt(plaintext: Uint8Array, contentKey: Uint8Array): Promise<Uint8Array> {
-  await _sodium.ready;
-  const sodium = _sodium;
-
-  const nonce = sodium.randombytes_buf(sodium.crypto_secretbox_NONCEBYTES);
-  const ciphertext = sodium.crypto_secretbox_easy(plaintext, nonce, contentKey);
-
-  // Wire format: version (1 byte) || nonce (24 bytes) || ciphertext+MAC
-  const result = new Uint8Array(1 + nonce.length + ciphertext.length);
-  result[0] = WIRE_VERSION;
-  result.set(nonce, 1);
-  result.set(ciphertext, 1 + nonce.length);
-  return result;
+export function frameKeyVersion(frame: Uint8Array): number {
+  if (frame.length < FRAME_OVERHEAD) throw new Error('Ciphertext too short');
+  if (frame[0] !== FRAME_FORMAT) {
+    throw new Error(`Unsupported wire format version 0x${frame[0].toString(16).padStart(2, '0')}. Please update your client.`);
+  }
+  const version = new DataView(frame.buffer, frame.byteOffset, frame.byteLength).getUint32(1, false);
+  if (version < 1) throw new Error('Invalid key version 0 in frame header');
+  return version;
 }
 
-/**
- * Decrypt a version||nonce||ciphertext+MAC blob produced by encrypt().
- * Throws if the version byte is unrecognised or if authentication fails.
- * Returns the plaintext bytes.
- *
- * Legacy migration: blobs written before the version prefix was introduced have
- * the wire format  nonce (24 bytes) || ciphertext+MAC  with no leading version
- * byte.  When the first byte is not WIRE_VERSION (0x01), the function
- * transparently attempts legacy decryption so that existing data is not
- * permanently lost on upgrade.  If legacy decryption also fails the Poly1305
- * MAC check, the version-mismatch error is thrown instead so the caller
- * receives a meaningful message.
- */
-export async function decrypt(versionedBlob: Uint8Array, contentKey: Uint8Array): Promise<Uint8Array> {
-  await _sodium.ready;
-  const sodium = _sodium;
-
-  const nonceLength = sodium.crypto_secretbox_NONCEBYTES;
-  // Minimum: 1 (version) + 24 (nonce) + 16 (MAC)
-  if (versionedBlob.length < 1 + nonceLength + sodium.crypto_secretbox_MACBYTES) {
-    throw new Error('Ciphertext too short');
-  }
-
-  const version = versionedBlob[0];
-
-  let currentFormatError: unknown;
-  if (version === WIRE_VERSION) {
-    // Current format: version (1) || nonce (24) || ciphertext+MAC
-    const nonce = versionedBlob.slice(1, 1 + nonceLength);
-    const ciphertext = versionedBlob.slice(1 + nonceLength);
-    try {
-      return sodium.crypto_secretbox_open_easy(ciphertext, nonce, contentKey);
-    } catch (err) {
-      // One legacy blob in 256 has a random nonce starting with 0x01 and lands
-      // here; it gets the legacy attempt below before the error is reported.
-      currentFormatError = err;
-    }
-  }
-
-  // Legacy format (pre-version-prefix): nonce (24) || ciphertext+MAC
-  // Attempt decryption treating the full blob as a legacy payload.
-  // If the Poly1305 MAC check also fails, surface the version-mismatch error
-  // so the caller knows to prompt the user to update their client.
-  try {
-    const legacyNonce = versionedBlob.slice(0, nonceLength);
-    const legacyCiphertext = versionedBlob.slice(nonceLength);
-    return sodium.crypto_secretbox_open_easy(legacyCiphertext, legacyNonce, contentKey);
-  } catch {
-    // Legacy decryption also failed — fall through to the error below.
-  }
-
-  if (currentFormatError !== undefined) throw currentFormatError;
-  throw new Error(
-    `Unsupported wire format version 0x${version.toString(16).padStart(2, '0')}. Please update your client.`
-  );
+/** Decrypt a frame with the key for its version. Throws if the key, the header or any byte is wrong. */
+export async function decryptFrame(frame: Uint8Array, key: Uint8Array): Promise<Uint8Array> {
+  frameKeyVersion(frame);
+  assertKey(key, 'Content key');
+  return aeadDecrypt(frame.subarray(HEADER_BYTES), key, frame.slice(0, HEADER_BYTES));
 }
 
-/** Encrypt a UTF-8 string and return the result as a base64 string. */
-export async function encryptString(plaintext: string, contentKey: Uint8Array): Promise<string> {
-  await _sodium.ready;
-  const bytes = _sodium.from_string(plaintext);
-  const encrypted = await encrypt(bytes, contentKey);
-  return _sodium.to_base64(encrypted);
+/** Decrypt a frame with the key its header names, taken from the Space's keyring. */
+export async function decryptFrameWithKeyring(frame: Uint8Array, keyring: Keyring): Promise<Uint8Array> {
+  return decryptFrame(frame, await keyring.keyFor(frameKeyVersion(frame)));
 }
 
-/** Decrypt a base64 string produced by encryptString() and return the UTF-8 plaintext. */
-export async function decryptString(base64Ciphertext: string, contentKey: Uint8Array): Promise<string> {
+/** Encrypt a UTF-8 string and return the frame as a base64 string. */
+export async function encryptFrameString(plaintext: string, key: Uint8Array, keyVersion: number): Promise<string> {
   await _sodium.ready;
-  const bytes = _sodium.from_base64(base64Ciphertext);
-  const plaintext = await decrypt(bytes, contentKey);
-  return _sodium.to_string(plaintext);
+  return _sodium.to_base64(await encryptFrame(_sodium.from_string(plaintext), key, keyVersion));
+}
+
+/** Decrypt a base64 frame produced by encryptFrameString() and return the UTF-8 plaintext. */
+export async function decryptFrameString(base64Frame: string, key: Uint8Array): Promise<string> {
+  await _sodium.ready;
+  return _sodium.to_string(await decryptFrame(_sodium.from_base64(base64Frame), key));
+}
+
+/** Like decryptFrameString, taking the key by the version in the frame's header. */
+export async function decryptFrameStringWithKeyring(base64Frame: string, keyring: Keyring): Promise<string> {
+  await _sodium.ready;
+  return _sodium.to_string(await decryptFrameWithKeyring(_sodium.from_base64(base64Frame), keyring));
 }

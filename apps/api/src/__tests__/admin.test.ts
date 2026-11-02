@@ -314,8 +314,12 @@ describe('admin router', () => {
 
     it('lists the limit and the reconciled usage', async () => {
       const id = await addUser({ service: { diskQuotaBytes: 1000 } });
-      fs.mkdirSync(path.join(tmpDir, 'uploads', id), { recursive: true });
-      fs.writeFileSync(path.join(tmpDir, 'uploads', id, 'a.enc'), Buffer.alloc(300));
+      const { registryStmts } = await import('../db/registry');
+      registryStmts.insertPendingAttachment.run({
+        attachment_id: 'att-1', workspace_id: 'ws1', uploader_user_id: id, owner_user_id: id, kind: 'file', storage: 'local',
+        storage_key: `${id}/att-1`, key_version: 1, wrapped_key: 'k', expected_size: 300, created_at: Date.now(),
+      });
+      registryStmts.confirmAttachment.run({ attachment_id: 'att-1', size_bytes: 300 });
       const { reconcileUserUsage } = await import('../lib/quota');
       reconcileUserUsage(id);
 

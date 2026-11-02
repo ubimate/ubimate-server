@@ -64,6 +64,8 @@ workspacesRouter.put('/:id/key/:userId', (req: Request, res: Response) => {
     wrapped_key,
     granted_at: Date.now(),
   });
+  // The bootstrap case above is the Space's first key: whoever puts it there owns the Space.
+  if (!callerKey) registryStmts.recordSpaceOwner.run({ workspace_id: req.params.id, owner_user_id: req.userId });
 
   res.status(204).send();
 });

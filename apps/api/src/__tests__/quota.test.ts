@@ -52,10 +52,14 @@ describe('storage quotas', () => {
     return id;
   }
 
-  function writeUpload(userId: string, name: string, bytes: number): void {
-    const dir = path.join(tmpDir, 'uploads', userId);
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, name), Buffer.alloc(bytes, 1));
+  /** A ledger row for `userId`, `pending` or `confirmed` at `bytes`. Moves no usage: reconcile or confirmAttachment does. */
+  function addAttachment(userId: string, attachmentId: string, bytes: number, status: 'pending' | 'confirmed' = 'confirmed'): void {
+    registry.registryStmts.insertPendingAttachment.run({
+      attachment_id: attachmentId, workspace_id: 'ws1', uploader_user_id: userId, owner_user_id: userId, kind: 'file',
+      storage: 'local', storage_key: `${userId}/${attachmentId}`, key_version: 1, wrapped_key: 'k', expected_size: bytes,
+      created_at: Date.now(),
+    });
+    if (status === 'confirmed') registry.registryStmts.confirmAttachment.run({ attachment_id: attachmentId, size_bytes: bytes });
   }
 
   describe('getQuotaBytes', () => {
@@ -129,43 +133,42 @@ describe('storage quotas', () => {
   describe('reconcileUserUsage', () => {
     const usageOf = (id: string) => quota.listUsageByUser().get(id);
 
-    it('counts the files in the uploads directory, and records a ledger row for each', () => {
+    it('adds up the confirmed attachments the account owns', () => {
       const id = addUser();
-      writeUpload(id, 'a.enc', 100);
-      writeUpload(id, 'b.enc', 250);
+      addAttachment(id, 'a', 100);
+      addAttachment(id, 'b', 250);
 
       expect(quota.reconcileUserUsage(id)).toEqual({ attachments: 350, sync: 0 });
       expect(usageOf(id)).toEqual({ attachments: 350, sync: 0 });
-
-      const rows = registry.registryStmts.listAttachmentsForOwner.all(id) as { file_id: string; size_bytes: number }[];
-      expect(rows.map((r) => [r.file_id, r.size_bytes]).sort()).toEqual([['a.enc', 100], ['b.enc', 250]]);
     });
 
-    it('records the uploader as the owner and no workspace, before sharing exists', () => {
+    it('does not count a pending attachment, whose bytes are only promised', () => {
       const id = addUser();
-      writeUpload(id, 'a.enc', 10);
-      quota.reconcileUserUsage(id);
-      expect(registry.registryStmts.listAttachmentsForOwner.all(id)).toEqual([
-        { file_id: 'a.enc', workspace_id: '', owner_user_id: id, uploader_user_id: id, size_bytes: 10 },
-      ]);
+      addAttachment(id, 'a', 100);
+      addAttachment(id, 'b', 5000, 'pending');
+      expect(quota.reconcileUserUsage(id)?.attachments).toBe(100);
     });
 
-    it('follows a file that grew, and one that is gone', () => {
+    it('does not count a file on the disk that has no row: it was never confirmed', () => {
       const id = addUser();
-      writeUpload(id, 'a.enc', 100);
-      writeUpload(id, 'b.enc', 100);
-      quota.reconcileUserUsage(id);
+      fs.mkdirSync(path.join(tmpDir, 'uploads', id), { recursive: true });
+      fs.writeFileSync(path.join(tmpDir, 'uploads', id, 'stray'), Buffer.alloc(900));
+      expect(quota.reconcileUserUsage(id)?.attachments).toBe(0);
+    });
 
-      writeUpload(id, 'a.enc', 300);
-      fs.rmSync(path.join(tmpDir, 'uploads', id, 'b.enc'));
-      expect(quota.reconcileUserUsage(id)?.attachments).toBe(300);
-      expect(usageOf(id)?.attachments).toBe(300);
-      expect((registry.registryStmts.listAttachmentsForOwner.all(id) as unknown[]).length).toBe(1);
+    it('follows a row that was forgotten', () => {
+      const id = addUser();
+      addAttachment(id, 'a', 100);
+      addAttachment(id, 'b', 100);
+      quota.reconcileUserUsage(id);
+      quota.forgetAttachment('b');
+      expect(quota.reconcileUserUsage(id)?.attachments).toBe(100);
+      expect(usageOf(id)?.attachments).toBe(100);
     });
 
     it('repairs a counter that is wrong', () => {
       const id = addUser();
-      writeUpload(id, 'a.enc', 40);
+      addAttachment(id, 'a', 40);
       registry.registryStmts.setUsedBytes.run({ user_id: id, kind: 'attachments', used_bytes: 999_999, updated_at: 1 });
       expect(quota.reconcileUserUsage(id)?.attachments).toBe(40);
       expect(usageOf(id)?.attachments).toBe(40);
@@ -176,29 +179,11 @@ describe('storage quotas', () => {
       expect(quota.reconcileUserUsage(id)).toEqual({ attachments: 0, sync: 0 });
     });
 
-    it('keeps two accounts\' files apart when they have the same name', () => {
+    it('does not count another account\'s attachments', () => {
       const a = addUser();
       const b = addUser();
-      writeUpload(a, 'same.enc', 100);
-      writeUpload(b, 'same.enc', 7);
-      quota.reconcileUserUsage(a);
-      quota.reconcileUserUsage(b);
-      expect(usageOf(a)?.attachments).toBe(100);
-      expect(usageOf(b)?.attachments).toBe(7);
-
-      // And one account's file going away leaves the other's row alone.
-      fs.rmSync(path.join(tmpDir, 'uploads', a, 'same.enc'));
-      quota.reconcileUserUsage(a);
-      expect(usageOf(a)?.attachments).toBe(0);
-      expect(usageOf(b)?.attachments).toBe(7);
-      expect(quota.reconcileUserUsage(b)?.attachments).toBe(7);
-    });
-
-    it('does not count another account\'s files', () => {
-      const a = addUser();
-      const b = addUser();
-      writeUpload(a, 'a.enc', 100);
-      writeUpload(b, 'b.enc', 7);
+      addAttachment(a, 'a', 100);
+      addAttachment(b, 'b', 7);
       quota.reconcileUserUsage(a);
       quota.reconcileUserUsage(b);
       expect(usageOf(a)?.attachments).toBe(100);
@@ -236,23 +221,23 @@ describe('storage quotas', () => {
 
     it('is gone with the account', () => {
       const id = addUser();
-      writeUpload(id, 'a.enc', 10);
+      addAttachment(id, 'a', 10);
       quota.reconcileUserUsage(id);
       registry.registryStmts.deleteUser.run(id);
       expect(usageOf(id)).toBeUndefined();
-      expect(registry.registryStmts.listAttachmentsForOwner.all(id)).toEqual([]);
+      expect(registry.registryStmts.getAttachment.get('a')).toBeUndefined();
     });
   });
 
   describe('reconcileAllUsage', () => {
     it('reconciles real accounts and leaves demo accounts out', async () => {
       const real = addUser();
-      writeUpload(real, 'a.enc', 12);
+      addAttachment(real, 'a', 12);
       const demoId = randomUUID();
       registry.registryStmts.createDemoUser.run({
         id: demoId, email: `${demoId}@demo.local`, properties: '{}', created_at: Date.now(), demo_expires_at: Date.now() + 1000,
       });
-      writeUpload(demoId, 'd.enc', 99);
+      addAttachment(demoId, 'd', 99);
 
       expect(await quota.reconcileAllUsage()).toBe(1);
       expect(quota.listUsageByUser().get(real)?.attachments).toBe(12);
@@ -289,43 +274,85 @@ describe('storage quotas', () => {
     });
   });
 
-  describe('recordUpload', () => {
-    const rowsOf = (id: string) => registry.registryStmts.listAttachmentsForOwner.all(id) as {
-      file_id: string; workspace_id: string; size_bytes: number;
-    }[];
-
-    it('corrects a file the reconcile job saw while it was still being written', () => {
+  describe('confirmAttachment', () => {
+    it('charges the owner and marks the row confirmed', () => {
       const id = addUser();
-      writeUpload(id, 'a.enc', 30);            // the stream so far
+      addAttachment(id, 'a', 100, 'pending');
       quota.reconcileUserUsage(id);
-      expect(rowsOf(id)[0].size_bytes).toBe(30);
-
-      writeUpload(id, 'a.enc', 200);           // and the whole file
-      quota.recordUpload({ userId: id, workspaceId: 'ws1', fileId: 'a.enc', size: 200 });
-      expect(rowsOf(id)).toMatchObject([{ file_id: 'a.enc', workspace_id: 'ws1', size_bytes: 200 }]);
-      expect(quota.listUsageByUser().get(id)?.attachments).toBe(200);
+      const row = registry.registryStmts.getAttachment.get('a') as import('../db/registry').AttachmentRow;
+      expect(quota.confirmAttachment(row, 100)).toBe(true);
+      expect(quota.listUsageByUser().get(id)?.attachments).toBe(100);
+      expect(registry.registryStmts.getAttachment.get('a')).toMatchObject({ status: 'confirmed', size_bytes: 100 });
     });
 
-    it('counts a file the reconcile job already counted once, not twice', () => {
+    it('charges once however often it is called', () => {
       const id = addUser();
-      writeUpload(id, 'a.enc', 50);
-      quota.reconcileUserUsage(id);
-      quota.recordUpload({ userId: id, workspaceId: '', fileId: 'a.enc', size: 50 });
-      expect(quota.listUsageByUser().get(id)?.attachments).toBe(50);
+      addAttachment(id, 'a', 100, 'pending');
+      const row = registry.registryStmts.getAttachment.get('a') as import('../db/registry').AttachmentRow;
+      expect(quota.confirmAttachment(row, 100)).toBe(true);
+      expect(quota.confirmAttachment(row, 100)).toBe(false);
+      expect(quota.listUsageByUser().get(id)?.attachments).toBe(100);
     });
 
-    it('measures an account it has never measured, rather than counting the one upload', () => {
+    it('measures an account it has never measured, rather than counting the one attachment', () => {
       const id = addUser();
-      writeUpload(id, 'old.enc', 800);
-      writeUpload(id, 'new.enc', 100);
+      addAttachment(id, 'old', 800);
+      addAttachment(id, 'new', 100, 'pending');
       expect(quota.listUsageByUser().has(id)).toBe(false);
-      quota.recordUpload({ userId: id, workspaceId: '', fileId: 'new.enc', size: 100 });
+      const row = registry.registryStmts.getAttachment.get('new') as import('../db/registry').AttachmentRow;
+      quota.confirmAttachment(row, 100);
       expect(quota.listUsageByUser().get(id)?.attachments).toBe(900);
     });
+  });
 
-    it('does nothing for an account that is not registered', () => {
-      quota.recordUpload({ userId: randomUUID(), workspaceId: '', fileId: 'a.enc', size: 5 });
-      expect(quota.listUsageByUser().size).toBe(0);
+  describe('forgetAttachment and retireAttachment', () => {
+    it('forget gives a confirmed attachment\'s bytes back and drops the row; a pending one gives nothing', () => {
+      const id = addUser();
+      addAttachment(id, 'a', 100);
+      addAttachment(id, 'p', 50, 'pending');
+      quota.reconcileUserUsage(id);
+      quota.forgetAttachment('p');
+      expect(quota.listUsageByUser().get(id)?.attachments).toBe(100);
+      quota.forgetAttachment('a');
+      expect(quota.listUsageByUser().get(id)?.attachments).toBe(0);
+      expect(registry.registryStmts.getAttachment.get('a')).toBeUndefined();
+    });
+
+    it('retire gives the bytes back once and keeps the row as deleted', () => {
+      const id = addUser();
+      addAttachment(id, 'a', 100);
+      quota.reconcileUserUsage(id);
+      quota.retireAttachment('a');
+      quota.retireAttachment('a');
+      expect(quota.listUsageByUser().get(id)?.attachments).toBe(0);
+      expect(registry.registryStmts.getAttachment.get('a')).toMatchObject({ status: 'deleted' });
+    });
+  });
+
+  describe('holds', () => {
+    it('count against the room until released, and a second hold for the same id replaces the first', () => {
+      const id = addUser({ service: { diskQuotaBytes: 100 } });
+      const later = Date.now() + 60_000;
+      expect(quota.tryReserve(id, 100, 70, 'a', later)).toBe(true);
+      expect(quota.tryReserve(id, 100, 70, 'b', later)).toBe(false);
+      expect(quota.tryReserve(id, 100, 90, 'a', later)).toBe(true);   // a retry of a: replaced, not added
+      expect(quota.remainingBytes(id, 100)).toBe(10);
+      quota.releaseReservation('a');
+      expect(quota.remainingBytes(id, 100)).toBe(100);
+    });
+
+    it('keep the earlier hold when a replacement does not fit', () => {
+      const id = addUser();
+      const later = Date.now() + 60_000;
+      quota.tryReserve(id, 100, 60, 'a', later);
+      expect(quota.tryReserve(id, 100, 200, 'a', later)).toBe(false);
+      expect(quota.remainingBytes(id, 100)).toBe(40);
+    });
+
+    it('end by themselves when they expire', () => {
+      const id = addUser();
+      quota.tryReserve(id, 100, 100, 'a', Date.now() - 1);
+      expect(quota.remainingBytes(id, 100)).toBe(100);
     });
   });
 });

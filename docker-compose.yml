@@ -1,3 +1,17 @@
+# Ubimate with its attachment storage, for trying it out or a small self-hosted install (docs/OBJECT-STORAGE.md).
+#
+# Attachments live in an S3-compatible bucket; the API refuses to start in production without one. This file runs
+# SeaweedFS' S3 gateway next to the app. Set the two keys in `.env` (any values, say `openssl rand -hex 16`):
+#
+#   S3_ACCESS_KEY=...
+#   S3_SECRET_KEY=...
+#
+# S3_PUBLIC_ENDPOINT is where *browsers* reach the bucket: they PUT and GET encrypted files there by signed URL. On one
+# machine that is localhost:8333; behind a domain, publish the gateway (port 8333) over HTTPS and put its address there.
+# The API itself talks to the gateway on the compose network (S3_ENDPOINT).
+#
+# SeaweedFS has no separate permission for deleting, so the API's credential can delete here; with Contabo, AWS or
+# any store that has one, give the cleanup job its own credential (S3_CLEANUP_ACCESS_KEY, S3_CLEANUP_SECRET_KEY).
 services:
   app:
     build:
@@ -12,11 +26,54 @@ services:
         required: false
     environment:
       NODE_ENV: production
+      S3_ENDPOINT: http://seaweedfs:8333
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:8333}
+      S3_BUCKET: ${S3_BUCKET:-ubimate-attachments}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?set S3_ACCESS_KEY in .env}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?set S3_SECRET_KEY in .env}
+      S3_REGION: us-east-1
     volumes:
       - app-data:/app/apps/api/data
     ports:
       - "3001:3001"
+    depends_on:
+      bucket-init:
+        condition: service_completed_successfully
     restart: unless-stopped
+
+  seaweedfs:
+    image: chrislusf/seaweedfs:4.50
+    command: server -s3 -dir=/data -volume.max=16
+    # The gateway's one identity is read from these.
+    environment:
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY:?set S3_ACCESS_KEY in .env}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY:?set S3_SECRET_KEY in .env}
+    volumes:
+      - bucket-data:/data
+    ports:
+      - "8333:8333"
+    restart: unless-stopped
+
+  # Makes the bucket once the gateway answers, then exits.
+  bucket-init:
+    image: amazon/aws-cli:2.17.0
+    depends_on:
+      - seaweedfs
+    environment:
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY:?set S3_ACCESS_KEY in .env}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY:?set S3_SECRET_KEY in .env}
+      AWS_DEFAULT_REGION: us-east-1
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        for i in $$(seq 1 60); do
+          aws --endpoint-url http://seaweedfs:8333 s3 mb s3://${S3_BUCKET:-ubimate-attachments} 2>/dev/null \
+            || aws --endpoint-url http://seaweedfs:8333 s3api head-bucket --bucket ${S3_BUCKET:-ubimate-attachments} 2>/dev/null \
+            && exit 0
+          sleep 2
+        done
+        echo "the bucket could not be made" >&2; exit 1
 
 volumes:
   app-data:
+  bucket-data:

@@ -1,121 +1,159 @@
 import { describe, expect, it } from 'vitest';
 import _sodium from 'libsodium-wrappers-sumo';
-import { decrypt, decryptString, encrypt, encryptString, generateContentKey } from './contentEncryption';
+import {
+  decryptFrame,
+  decryptFrameString,
+  decryptFrameWithKeyring,
+  encryptFrame,
+  encryptFrameString,
+  FRAME_OVERHEAD,
+  frameKeyVersion,
+  generateContentKey,
+} from './contentEncryption';
+import { createKeyring, UnknownKeyVersionError } from './keyChain';
 
 const bytes = (s: string) => new TextEncoder().encode(s);
 const text = (b: Uint8Array) => new TextDecoder().decode(b);
 
-/** The format written before the version byte: nonce (24) || ciphertext+MAC. */
-async function legacyEncrypt(plaintext: Uint8Array, key: Uint8Array, nonce?: Uint8Array): Promise<Uint8Array> {
-  await _sodium.ready;
-  const n = nonce ?? _sodium.randombytes_buf(_sodium.crypto_secretbox_NONCEBYTES);
-  const ciphertext = _sodium.crypto_secretbox_easy(plaintext, n, key);
-  const blob = new Uint8Array(n.length + ciphertext.length);
-  blob.set(n);
-  blob.set(ciphertext, n.length);
-  return blob;
-}
-
-describe('encrypt / decrypt', () => {
-  it('round-trips bytes, including an empty plaintext', async () => {
+describe('frames (format 2)', () => {
+  it('round-trips bytes, including an empty plaintext, at several versions', async () => {
     const key = await generateContentKey();
-    for (const plaintext of ['hello', '', 'ünïcødé 🔐'.repeat(100)]) {
-      expect(text(await decrypt(await encrypt(bytes(plaintext), key), key))).toBe(plaintext);
+    for (const version of [1, 2, 300, 0xffffffff]) {
+      for (const plaintext of ['hello', '', 'ünïcødé 🔐'.repeat(100)]) {
+        const frame = await encryptFrame(bytes(plaintext), key, version);
+        expect(text(await decryptFrame(frame, key))).toBe(plaintext);
+        expect(frameKeyVersion(frame)).toBe(version);
+      }
     }
   });
 
-  it('writes version 0x01, then a 24-byte nonce, then ciphertext and a 16-byte MAC', async () => {
+  it('writes 0x02, the version as a big-endian uint32, a 24-byte nonce, then ciphertext and a 16-byte tag', async () => {
     const key = await generateContentKey();
-    const blob = await encrypt(bytes('abc'), key);
-    expect(blob[0]).toBe(0x01);
-    expect(blob.length).toBe(1 + 24 + 3 + 16);
+    const frame = await encryptFrame(bytes('abc'), key, 0x01020304);
+    expect(Array.from(frame.slice(0, 5))).toEqual([0x02, 0x01, 0x02, 0x03, 0x04]);
+    expect(frame.length).toBe(5 + 24 + 3 + 16);
+    expect(frame.length).toBe(FRAME_OVERHEAD + 3);
   });
 
-  it('uses a fresh nonce each time, so the same plaintext never encrypts the same way twice', async () => {
+  it('never writes the earlier 0x01 format, even at version 1', async () => {
     const key = await generateContentKey();
-    const blobs = await Promise.all(Array.from({ length: 50 }, () => encrypt(bytes('same'), key)));
-    const nonces = new Set(blobs.map((b) => _sodium.to_hex(b.slice(1, 25))));
-    const whole = new Set(blobs.map((b) => _sodium.to_hex(b)));
-    expect(nonces.size).toBe(50);
-    expect(whole.size).toBe(50);
+    for (let i = 0; i < 20; i++) expect((await encryptFrame(bytes('x'), key, 1))[0]).toBe(0x02);
+  });
+
+  it('uses a fresh nonce each time', async () => {
+    const key = await generateContentKey();
+    const frames = await Promise.all(Array.from({ length: 50 }, () => encryptFrame(bytes('same'), key, 1)));
+    expect(new Set(frames.map((f) => _sodium.to_hex(f.slice(5, 29)))).size).toBe(50);
+    expect(new Set(frames.map((f) => _sodium.to_hex(f))).size).toBe(50);
   });
 
   it('does not contain the plaintext', async () => {
     const key = await generateContentKey();
-    const secret = 'my secret page title';
-    const blob = await encrypt(bytes(secret), key);
-    expect(_sodium.to_hex(blob)).not.toContain(_sodium.to_hex(bytes(secret)));
+    const frame = await encryptFrame(bytes('my secret page title'), key, 1);
+    expect(_sodium.to_hex(frame)).not.toContain(_sodium.to_hex(bytes('my secret page title')));
   });
 
   it('refuses the wrong key', async () => {
-    const blob = await encrypt(bytes('hello'), await generateContentKey());
-    await expect(decrypt(blob, await generateContentKey())).rejects.toThrow();
+    const frame = await encryptFrame(bytes('hello'), await generateContentKey(), 1);
+    await expect(decryptFrame(frame, await generateContentKey())).rejects.toThrow();
   });
 
-  it('refuses a blob with any single byte changed', async () => {
+  it('refuses a frame with any single byte changed', async () => {
     const key = await generateContentKey();
-    const blob = await encrypt(bytes('hello world'), key);
-    // Byte 0 is the version: flipping it leaves the legacy fallback, which also fails.
+    const frame = await encryptFrame(bytes('hello world'), key, 3);
     let refused = 0;
-    for (let i = 0; i < blob.length; i++) {
-      const tampered = blob.slice();
+    for (let i = 0; i < frame.length; i++) {
+      const tampered = frame.slice();
       tampered[i] ^= 0x01;
-      await expect(decrypt(tampered, key), `byte ${i}`).rejects.toThrow();
+      await expect(decryptFrame(tampered, key), `byte ${i}`).rejects.toThrow();
       refused++;
     }
-    expect(refused).toBe(1 + 24 + 11 + 16);
+    expect(refused).toBe(5 + 24 + 11 + 16);
   });
 
-  it('refuses a truncated blob and one too short to hold a MAC', async () => {
+  it('refuses a frame whose version bytes were changed, each of the four on its own', async () => {
+    // The version is in the associated data, so it is authenticated even though it is plaintext.
     const key = await generateContentKey();
-    const blob = await encrypt(bytes('hello world'), key);
-    await expect(decrypt(blob.slice(0, -1), key)).rejects.toThrow();
-    await expect(decrypt(blob.slice(0, 1 + 24 + 15), key)).rejects.toThrow('Ciphertext too short');
+    const frame = await encryptFrame(bytes('hello'), key, 3);
+    for (let i = 1; i <= 4; i++) {
+      const tampered = frame.slice();
+      tampered[i] ^= 0xff;
+      expect(frameKeyVersion(tampered)).not.toBe(3);
+      await expect(decryptFrame(tampered, key), `version byte ${i}`).rejects.toThrow();
+    }
   });
 
-  it('refuses an unknown version byte with an "update your client" message', async () => {
+  it('refuses a truncated frame and one too short to hold a tag', async () => {
     const key = await generateContentKey();
-    const blob = await encrypt(bytes('hello'), key);
-    blob[0] = 0x02;
-    await expect(decrypt(blob, key)).rejects.toThrow(/version 0x02.*update your client/);
+    const frame = await encryptFrame(bytes('hello world'), key, 1);
+    await expect(decryptFrame(frame.slice(0, -1), key)).rejects.toThrow();
+    await expect(decryptFrame(frame.slice(0, FRAME_OVERHEAD - 1), key)).rejects.toThrow('Ciphertext too short');
+  });
+
+  it('refuses the earlier 0x01 format and any other unknown format byte', async () => {
+    const key = await generateContentKey();
+    for (const format of [0x00, 0x01, 0x03]) {
+      const frame = await encryptFrame(bytes('hello'), key, 1);
+      frame[0] = format;
+      await expect(decryptFrame(frame, key)).rejects.toThrow(/Unsupported wire format version.*update your client/);
+    }
+  });
+
+  it('refuses version 0, to write and to read', async () => {
+    const key = await generateContentKey();
+    await expect(encryptFrame(bytes('x'), key, 0)).rejects.toThrow();
+    const frame = await encryptFrame(bytes('x'), key, 1);
+    frame.fill(0, 1, 5);
+    expect(() => frameKeyVersion(frame)).toThrow(/version 0/);
+  });
+
+  it('refuses a key of the wrong length', async () => {
+    await expect(encryptFrame(bytes('x'), new Uint8Array(31), 1)).rejects.toThrow('32 bytes');
+  });
+
+  it('reads a frame of a subarray view, not only a standalone buffer', async () => {
+    const key = await generateContentKey();
+    const frame = await encryptFrame(bytes('view'), key, 7);
+    const padded = new Uint8Array(frame.length + 10);
+    padded.set(frame, 3);
+    const view = padded.subarray(3, 3 + frame.length);
+    expect(frameKeyVersion(view)).toBe(7);
+    expect(text(await decryptFrame(view, key))).toBe('view');
   });
 });
 
-describe('legacy blobs (no version byte)', () => {
-  it('still decrypt', async () => {
-    const key = await generateContentKey();
-    // A nonce that cannot be mistaken for the current version byte.
-    const nonce = new Uint8Array(24).fill(0x42);
-    expect(text(await decrypt(await legacyEncrypt(bytes('old data'), key, nonce), key))).toBe('old data');
+describe('frames with a keyring', () => {
+  it('take the key by the version in the header', async () => {
+    const k1 = await generateContentKey();
+    const k2 = await generateContentKey();
+    const { wrapPreviousKey } = await import('./keyChain');
+    const chain = new Map([[2, await wrapPreviousKey(k1, k2, 'ws', 2)]]);
+    const keyring = createKeyring({ workspaceId: 'ws', currentVersion: 2, currentKey: k2, chain });
+    const old = await encryptFrame(bytes('written at 1'), k1, 1);
+    const now = await encryptFrame(bytes('written at 2'), k2, 2);
+    expect(text(await decryptFrameWithKeyring(old, keyring))).toBe('written at 1');
+    expect(text(await decryptFrameWithKeyring(now, keyring))).toBe('written at 2');
   });
 
-  it('still decrypt when the random nonce happens to start with 0x01', async () => {
-    // One legacy blob in 256 has a nonce whose first byte equals WIRE_VERSION, so it
-    // reads as the current format. Its data must not be lost to that coincidence.
-    const key = await generateContentKey();
-    const nonce = new Uint8Array(24).fill(0x42);
-    nonce[0] = 0x01;
-    expect(text(await decrypt(await legacyEncrypt(bytes('old data'), key, nonce), key))).toBe('old data');
-  });
-
-  it('refuse the wrong key', async () => {
-    const nonce = new Uint8Array(24).fill(0x42);
-    const blob = await legacyEncrypt(bytes('old data'), await generateContentKey(), nonce);
-    await expect(decrypt(blob, await generateContentKey())).rejects.toThrow();
+  it('say so when the frame is from a version the keyring has not got yet', async () => {
+    const k1 = await generateContentKey();
+    const keyring = createKeyring({ workspaceId: 'ws', currentVersion: 1, currentKey: k1, chain: new Map() });
+    const ahead = await encryptFrame(bytes('x'), await generateContentKey(), 2);
+    await expect(decryptFrameWithKeyring(ahead, keyring)).rejects.toBeInstanceOf(UnknownKeyVersionError);
   });
 });
 
-describe('encryptString / decryptString', () => {
+describe('encryptFrameString / decryptFrameString', () => {
   it('round-trips through base64', async () => {
     const key = await generateContentKey();
-    const encrypted = await encryptString('{"title":"Secret"}', key);
+    const encrypted = await encryptFrameString('{"title":"Secret"}', key, 2);
     expect(encrypted).not.toContain('Secret');
-    expect(await decryptString(encrypted, key)).toBe('{"title":"Secret"}');
+    expect(await decryptFrameString(encrypted, key)).toBe('{"title":"Secret"}');
   });
 
   it('refuses the wrong key', async () => {
-    const encrypted = await encryptString('x', await generateContentKey());
-    await expect(decryptString(encrypted, await generateContentKey())).rejects.toThrow();
+    const encrypted = await encryptFrameString('x', await generateContentKey(), 1);
+    await expect(decryptFrameString(encrypted, await generateContentKey())).rejects.toThrow();
   });
 });
 

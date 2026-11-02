@@ -7,7 +7,7 @@ import fs from 'fs';
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import { documentsRouter } from './routes/documents';
-import { uploadsRouter } from './routes/uploads';
+import { attachmentsRouter } from './routes/attachments';
 import { usageRouter } from './routes/usage';
 import { authRouter } from './routes/auth';
 import { unfurlRouter } from './routes/unfurl';
@@ -16,24 +16,18 @@ import { workspacesRouter } from './routes/workspaces';
 import { demoRouter, scheduleDemoCleanup } from './routes/demo';
 import { healthRouter } from './routes/health';
 import { scheduleUsageReconcile } from './lib/quota';
-import { requireAuth } from './middleware/auth';
+import { scheduleAttachmentCleanup } from './lib/attachments';
+import { assertObjectStorageConfigured } from './lib/objectStore';
 import { relay } from './relay';
-
-const NO_IMAGE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 150" width="200" height="150">
-  <rect width="200" height="150" fill="#f5f5f5" rx="6"/>
-  <rect x="55" y="35" width="90" height="80" rx="3" fill="none" stroke="#d0d0d0" stroke-width="2"/>
-  <polygon points="70,105 100,68 130,105" fill="#e2e2e2"/>
-  <circle cx="82" cy="58" r="9" fill="#e8e8e8"/>
-  <line x1="58" y1="38" x2="142" y2="112" stroke="#c8c8c8" stroke-width="2.5" stroke-linecap="round"/>
-  <line x1="142" y1="38" x2="58" y2="112" stroke="#c8c8c8" stroke-width="2.5" stroke-linecap="round"/>
-</svg>`;
 
 const API_PORT = Number(process.env.API_PORT) || 3001;
 
-// Resolve data directory the same way database.ts and uploads.ts do so that
-// setting DATA_DIR=/data (e.g. for a CapRover persistent volume) is honoured
-// everywhere — both for writing files and for serving them.
-const DATA_DIR = process.env.DATA_DIR ?? path.join(__dirname, '../data');
+try {
+  assertObjectStorageConfigured();
+} catch (err) {
+  console.error(`[startup] ${(err as Error).message}`);
+  process.exit(1);
+}
 
 // ---------------------------------------------------------------------------
 // Express – REST API
@@ -125,44 +119,10 @@ app.use('/api/auth', authRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api/demo', demoRouter);
 app.use('/api/documents', documentsRouter);
-app.use('/api/uploads', uploadsRouter);
+app.use('/api/attachments', attachmentsRouter);
 app.use('/api/usage', usageRouter);
 app.use('/api/unfurl', unfurlRouter);
 app.use('/api/workspaces', workspacesRouter);
-
-// Serve uploaded files — authentication required to prevent unauthenticated
-// access to potentially sensitive encrypted attachments.
-// Note: app.use (not app.get) is required here so Express strips the /uploads
-// prefix and req.path is relative to the mount point.
-app.use('/uploads', requireAuth, (req: express.Request, res: express.Response) => {
-  const relPath = req.path.replace(/^\//, ''); // strip leading slash
-  if (!relPath) {
-    res.setHeader('Content-Type', 'image/svg+xml');
-    res.send(NO_IMAGE_SVG);
-    return;
-  }
-  const uploadsRoot = path.resolve(path.join(DATA_DIR, 'uploads'));
-  const target = path.resolve(path.join(DATA_DIR, 'uploads', relPath));
-  // Guard against path traversal attempts.
-  if (!target.startsWith(uploadsRoot + path.sep)) {
-    res.setHeader('Content-Type', 'image/svg+xml');
-    res.send(NO_IMAGE_SVG);
-    return;
-  }
-  res.sendFile(target, (err) => {
-    if (err) {
-      // The error often fires because the client aborted the request mid-stream
-      // (onaborted). By then the response may have already started, so writing
-      // the SVG fallback would throw ERR_HTTP_HEADERS_SENT — just end instead.
-      if (res.headersSent || req.aborted) {
-        res.end();
-        return;
-      }
-      res.setHeader('Content-Type', 'image/svg+xml');
-      res.send(NO_IMAGE_SVG);
-    }
-  });
-});
 
 // ---------------------------------------------------------------------------
 // SPA – serve the Vite build in production
@@ -262,4 +222,5 @@ server.listen(API_PORT, () => {
   console.log(`[app]   REST API at /api, WebSocket at /yjs`);
   scheduleDemoCleanup();
   scheduleUsageReconcile();
+  scheduleAttachmentCleanup();
 });

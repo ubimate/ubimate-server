@@ -1,7 +1,5 @@
 import { Router, Request, Response } from 'express';
 import { randomUUID } from 'crypto';
-import path from 'path';
-import fs from 'fs';
 import type {
   Document,
   DocumentType,
@@ -16,9 +14,6 @@ import { requireAuth } from '../middleware/auth';
 import { registryStmts, resolvePrimaryWorkspaceId } from '../db/registry';
 import { relay } from '../relay';
 import { addDocumentEventClient, broadcastContentChanged, broadcastTreeChanged } from '../lib/documentEvents';
-import { forgetUpload } from '../lib/quota';
-
-const DATA_DIR = process.env.DATA_DIR ?? path.join(__dirname, '../../data');
 
 export const documentsRouter = Router();
 
@@ -167,6 +162,7 @@ documentsRouter.post('/', (req: Request, res: Response) => {
       wrapped_key: wrappedWorkspaceKey,
       granted_at: now,
     });
+    registryStmts.recordSpaceOwner.run({ workspace_id: doc.id, owner_user_id: req.userId });
   }
 
   broadcastTreeChanged(req.userId);
@@ -202,34 +198,6 @@ documentsRouter.put('/:id', (req: Request, res: Response) => {
   };
 
   stmts.updateDocument.run(updated);
-
-  // Clean up the superseded upload file when `src` changes on a media document.
-  // The file is immutable (UUID-named), so it can be deleted as soon as the
-  // reference is replaced.  Only applies to server-hosted uploads (/uploads/…).
-  if (properties !== undefined && (updated.type === 'image' || updated.type === 'file')) {
-    try {
-      const oldProps = JSON.parse(existing.properties) as Record<string, unknown>;
-      const oldSrc = typeof oldProps.src === 'string' ? oldProps.src : null;
-      const newSrc = typeof (properties as Record<string, unknown>).src === 'string'
-        ? (properties as Record<string, unknown>).src as string
-        : null;
-      if (oldSrc && oldSrc !== newSrc && oldSrc.startsWith('/uploads/')) {
-        const filename = path.basename(oldSrc);
-        if (filename && !filename.includes('..')) {
-          const filePath = path.join(DATA_DIR, 'uploads', req.userId, filename);
-          fs.unlink(filePath, (err) => {
-            if (err && err.code !== 'ENOENT') {
-              console.error(`[uploads] Failed to delete replaced file ${filePath}:`, err.message);
-            }
-          });
-          // Its bytes are the account's to use again (docs/DISK-QUOTAS.md §4.4).
-          forgetUpload(req.userId, filename);
-        }
-      }
-    } catch {
-      // Malformed JSON — skip silently.
-    }
-  }
 
   broadcastTreeChanged(req.userId);
   res.json(toOut({ ...updated, created_at: existing.created_at }));
@@ -428,6 +396,7 @@ documentsRouter.post('/sync/structural', (req: Request, res: Response) => {
             wrapped_key: payload.wrappedWorkspaceKey,
             granted_at: op.client_ts,
           });
+          registryStmts.recordSpaceOwner.run({ workspace_id: op.id, owner_user_id: req.userId });
         }
         applied++;
         continue;
@@ -625,45 +594,11 @@ documentsRouter.patch('/:id/unarchive', (req: Request, res: Response) => {
 // DELETE /api/documents/:id
 // ---------------------------------------------------------------------------
 documentsRouter.delete('/:id', (req: Request, res: Response) => {
-  const { db, stmts } = req.userDbHandle;
+  const { stmts } = req.userDbHandle;
   const existing = stmts.getDocument.get(req.params.id) as DocumentRow | undefined;
   if (!existing) return res.status(404).json({ error: 'Document not found' });
   if (req.params.id === resolvePrimaryWorkspaceId(req.userId)) {
     return res.status(403).json({ error: 'The home space cannot be deleted.' });
-  }
-
-  const userUploadsDir = path.join(DATA_DIR, 'uploads', req.userId);
-
-  // Gather image/file-type descendants to clean up uploaded files.
-  const subtree = (db.prepare(`
-    WITH RECURSIVE subtree(id, type, properties) AS (
-      SELECT id, type, properties FROM documents WHERE id = ?
-      UNION ALL
-      SELECT d.id, d.type, d.properties
-      FROM documents d
-      JOIN subtree s ON d.parent_id = s.id
-    )
-    SELECT type, properties FROM subtree WHERE type IN ('image', 'file')
-  `).all(req.params.id) as Array<{ type: string; properties: string }>);
-
-  for (const row of subtree) {
-    try {
-      const props = JSON.parse(row.properties) as Record<string, unknown>;
-      const src = typeof props.src === 'string' ? props.src : null;
-      if (!src) continue;
-      const filename = path.basename(new URL(src).pathname);
-      if (!filename || filename.includes('..')) continue;
-      const filePath = path.join(userUploadsDir, filename);
-      fs.unlink(filePath, (err) => {
-        if (err && err.code !== 'ENOENT') {
-          console.error(`[uploads] Failed to delete ${filePath}:`, err.message);
-        }
-      });
-      // Its bytes are the account's to use again (docs/DISK-QUOTAS.md §4.4).
-      forgetUpload(req.userId, filename);
-    } catch {
-      // Malformed URL or JSON — skip silently.
-    }
   }
 
   // deleteDocument prepared statement soft-deletes the whole subtree (status = 4 tombstone).

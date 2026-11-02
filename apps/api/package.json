@@ -8,10 +8,13 @@
     "start": "node dist/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:s3": "bash scripts/test-s3.sh",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "3.1161.0",
+    "@aws-sdk/s3-request-presigner": "3.1161.0",
     "@noble/curves": "2.2.0",
     "@ubimate/core": "workspace:*",
     "@ubimate/types": "workspace:*",

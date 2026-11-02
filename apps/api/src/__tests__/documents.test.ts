@@ -79,16 +79,6 @@ describe('PUT /api/documents/:id — old src file cleanup', () => {
   // Helpers
   // ---------------------------------------------------------------------------
 
-  /** Create a real file in the uploads directory and return its server path. */
-  function seedUploadFile(filename?: string): { filePath: string; src: string } {
-    const uploadsDir = path.join(tmpDir, 'uploads', TEST_USER_ID);
-    fs.mkdirSync(uploadsDir, { recursive: true });
-    const fname = filename ?? `${randomUUID()}.png`;
-    const filePath = path.join(uploadsDir, fname);
-    fs.writeFileSync(filePath, 'fake-image-bytes');
-    return { filePath, src: `/uploads/${TEST_USER_ID}/${fname}` };
-  }
-
   /** POST /api/documents and return the created doc id. */
   async function createDoc(type: string, properties: Record<string, unknown>): Promise<string> {
     const res = await fetch(`${baseUrl}/api/documents`, {
@@ -100,9 +90,6 @@ describe('PUT /api/documents/:id — old src file cleanup', () => {
     const body = await res.json() as { id: string };
     return body.id;
   }
-
-  /** Wait a tick for async fs.unlink to complete. */
-  const tick = () => new Promise<void>((r) => setTimeout(r, 50));
 
   // ---------------------------------------------------------------------------
   // Tests
@@ -120,96 +107,6 @@ describe('PUT /api/documents/:id — old src file cleanup', () => {
     });
     expect(res.status).toBe(204);
     expect(written).toEqual([`event: content-changed\ndata: {"ids":["${id}"]}\n\n`]);
-  });
-
-  it('deletes the old file when src changes on an image document', async () => {
-    const { filePath: oldFile, src: oldSrc } = seedUploadFile();
-    const docId = await createDoc('image', { src: oldSrc });
-
-    const newSrc = `/uploads/${TEST_USER_ID}/${randomUUID()}.png`;
-    const res = await fetch(`${baseUrl}/api/documents/${docId}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ properties: { src: newSrc } }),
-    });
-    expect(res.status).toBe(200);
-
-    await tick();
-    expect(fs.existsSync(oldFile)).toBe(false);
-  });
-
-  it('deletes the old file when src changes on a file document', async () => {
-    const { filePath: oldFile, src: oldSrc } = seedUploadFile(`${randomUUID()}.pdf`);
-    const docId = await createDoc('file', { src: oldSrc });
-
-    const newSrc = `/uploads/${TEST_USER_ID}/${randomUUID()}.pdf`;
-    const res = await fetch(`${baseUrl}/api/documents/${docId}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ properties: { src: newSrc } }),
-    });
-    expect(res.status).toBe(200);
-
-    await tick();
-    expect(fs.existsSync(oldFile)).toBe(false);
-  });
-
-  it('does not delete the file when src is unchanged', async () => {
-    const { filePath, src } = seedUploadFile();
-    const docId = await createDoc('image', { src });
-
-    const res = await fetch(`${baseUrl}/api/documents/${docId}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ properties: { src, alt: 'updated alt text' } }),
-    });
-    expect(res.status).toBe(200);
-
-    await tick();
-    expect(fs.existsSync(filePath)).toBe(true);
-  });
-
-  it('does not delete anything when properties are not updated', async () => {
-    const { filePath, src } = seedUploadFile();
-    const docId = await createDoc('image', { src });
-
-    // PUT without a properties field — only structural change
-    const res = await fetch(`${baseUrl}/api/documents/${docId}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ position: 'b0' }),
-    });
-    expect(res.status).toBe(200);
-
-    await tick();
-    expect(fs.existsSync(filePath)).toBe(true);
-  });
-
-  it('does not delete when src changes on a non-media document type', async () => {
-    const { filePath, src: oldSrc } = seedUploadFile();
-    const docId = await createDoc('page', { src: oldSrc });
-
-    const res = await fetch(`${baseUrl}/api/documents/${docId}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ properties: { src: `/uploads/${TEST_USER_ID}/${randomUUID()}.png` } }),
-    });
-    expect(res.status).toBe(200);
-
-    await tick();
-    expect(fs.existsSync(filePath)).toBe(true);
-  });
-
-  it('does not attempt to delete external (non-upload) URLs', async () => {
-    // No file on disk — just verifies the PUT succeeds without throwing.
-    const docId = await createDoc('image', { src: 'https://example.com/old.png' });
-
-    const res = await fetch(`${baseUrl}/api/documents/${docId}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ properties: { src: 'https://example.com/new.png' } }),
-    });
-    expect(res.status).toBe(200);
   });
 
   it('returns 404 for a non-existent document', async () => {
@@ -364,6 +261,37 @@ describe('PUT /api/documents/:id — old src file cleanup', () => {
       | undefined;
     expect(row).toBeDefined();
     expect(row?.wrapped_key).toBe(wrappedKey);
+    // And the account that created it owns it.
+    expect(registryStmts.getSpaceOwner.get(workspaceId)).toEqual({ owner_user_id: TEST_USER_ID });
+  });
+
+  it('records the creator as the owner of a workspace made by POST /api/documents with its key, and of none made without', async () => {
+    const { registryStmts } = await import('../db/registry');
+    const make = async (extra: Record<string, unknown>) => {
+      const res = await fetch(`${baseUrl}/api/documents`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'workspace', position: 'a0', properties: { _enc: 'x' }, ...extra }),
+      });
+      expect(res.status).toBe(201);
+      return ((await res.json()) as { id: string }).id;
+    };
+    const withKey = await make({ wrappedWorkspaceKey: 'sealed' });
+    const withoutKey = await make({});
+    expect(registryStmts.getSpaceOwner.get(withKey)).toEqual({ owner_user_id: TEST_USER_ID });
+    // A Space the server holds no key for is not set up, and has no owner to name.
+    expect(registryStmts.getSpaceOwner.get(withoutKey)).toBeUndefined();
+  });
+
+  it('keeps the first owner when the same create is replayed, even by another account', async () => {
+    const { registryStmts } = await import('../db/registry');
+    const workspaceId = randomUUID();
+    registryStmts.recordSpaceOwner.run({ workspace_id: workspaceId, owner_user_id: 'someone-else' });
+    const res = await fetch(`${baseUrl}/api/documents/sync/structural`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ops: [{ op: 'create', id: workspaceId, client_ts: Date.now(), payload: { type: 'workspace', parent_id: null, properties: { _enc: 'c' }, wrappedWorkspaceKey: 'k' } }] }),
+    });
+    expect(res.status).toBe(200);
+    expect(registryStmts.getSpaceOwner.get(workspaceId)).toEqual({ owner_user_id: 'someone-else' });
   });
 
   // ---------------------------------------------------------------------------

@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import Database from 'better-sqlite3';
 import { registryStmts, parseUserProperties } from '../db/registry';
-import type { UserRow } from '../db/registry';
+import type { AttachmentRow, UserRow } from '../db/registry';
 
 const DATA_DIR = process.env.DATA_DIR ?? path.join(__dirname, '../../data');
 
@@ -88,12 +88,31 @@ export function withDiskQuota(properties: Record<string, unknown>, bytes: number
 // Usage
 // ---------------------------------------------------------------------------
 
-// Bytes promised to uploads that are streaming now, per account. Held here, not in the database: it
-// is true only while this process is running, and a crash then loses nothing that needs repair.
-const reserved = new Map<string, number>();
+// Bytes promised to attachments between presign and confirm, per hold (an attachment id). Held here,
+// not in the database: it is true only while this process is running, and a crash then loses nothing
+// that needs repair. A hold ends at confirm, or on its own at `expiresAt` (the upload URL's expiry).
+interface Hold { userId: string; bytes: number; expiresAt: number }
+const holds = new Map<string, Hold>();
 
 function reservedFor(userId: string): number {
-  return reserved.get(userId) ?? 0;
+  const now = Date.now();
+  let total = 0;
+  for (const [id, h] of holds) {
+    if (h.expiresAt <= now) holds.delete(id);
+    else if (h.userId === userId) total += h.bytes;
+  }
+  return total;
+}
+
+/**
+ * The account an upload into the Space `workspaceId` is charged to, and whose limit and usage it is checked
+ * against (docs/DISK-QUOTAS.md §4.5): the Space's owner, whoever uploads, so a guest's files count against the
+ * host. The uploader when the Space has no recorded owner (one made before owners were recorded, or not yet set
+ * up on the server) or when its owner's account no longer exists.
+ */
+export function chargedAccount(workspaceId: string, uploaderUserId: string): string {
+  const owner = (registryStmts.getSpaceOwner.get(workspaceId) as { owner_user_id: string } | undefined)?.owner_user_id;
+  return owner && registryStmts.getUserById.get(owner) ? owner : uploaderUserId;
 }
 
 /**
@@ -113,71 +132,70 @@ export function remainingBytes(userId: string, limit: number | null): number | n
 }
 
 /**
- * Promise `bytes` to an upload. Refused, with nothing promised, when they do not fit under `limit`
- * beside what is stored and what other uploads have promised. Accepted without counting when there is
- * no limit, so the caller can release unconditionally.
+ * Promise `bytes` to the attachment `holdId`, until `expiresAt`. A hold already placed under the same id
+ * is replaced, so a retried presign is not charged twice. Refused, with nothing promised and any earlier
+ * hold kept, when they do not fit under `limit` beside what is stored and what other holds promise.
+ * Accepted without counting when there is no limit, so the caller can release unconditionally.
  */
-export function tryReserve(userId: string, limit: number | null, bytes: number): boolean {
+export function tryReserve(userId: string, limit: number | null, bytes: number, holdId: string, expiresAt: number): boolean {
   if (limit === null) return true;
+  const earlier = holds.get(holdId);
+  holds.delete(holdId);
   const remaining = remainingBytes(userId, limit) ?? 0;
-  if (bytes > remaining) return false;
-  reserved.set(userId, reservedFor(userId) + bytes);
+  if (bytes > remaining) {
+    if (earlier) holds.set(holdId, earlier);
+    return false;
+  }
+  holds.set(holdId, { userId, bytes, expiresAt });
   return true;
 }
 
-/** Give back what `tryReserve` promised. */
-export function releaseReservation(userId: string, limit: number | null, bytes: number): void {
-  if (limit === null) return;
-  const left = reservedFor(userId) - bytes;
-  if (left > 0) reserved.set(userId, left);
-  else reserved.delete(userId);
+/** Give back what `tryReserve` promised for `holdId`. */
+export function releaseReservation(holdId: string): void {
+  holds.delete(holdId);
 }
 
 /**
- * Record a stored upload: a ledger row and the account's usage moved by its size. A file the
- * reconcile job has already found is not counted twice. The uploader is the owner until sharing
- * exists. Does nothing for an id that is not a registered account.
+ * Charge a confirmed attachment to its owner: its row becomes `confirmed` at `size`, and the owner's
+ * usage moves by it. Does nothing for an owner that is not a registered account, and returns false when
+ * the row is no longer pending.
  */
-export function recordUpload(args: { userId: string; workspaceId: string; fileId: string; size: number }): void {
-  if (!registryStmts.getUserById.get(args.userId)) return;
-  const now = Date.now();
-  // An account never measured has no figure to move by this upload's size: moving it would leave a
-  // count of this one file, short of everything else the account holds. It is measured instead.
-  const measured = registryStmts.getUsageRow.get(args.userId, 'attachments') !== undefined;
-  const inserted = registryStmts.insertAttachment.run({
-    file_id: args.fileId, workspace_id: args.workspaceId, owner_user_id: args.userId,
-    uploader_user_id: args.userId, size_bytes: args.size, created_at: now,
-  });
-  if (inserted.changes === 1) {
-    if (measured) registryStmts.addUsedBytes.run({ user_id: args.userId, kind: 'attachments', delta: args.size, updated_at: now });
-  } else {
-    // The reconcile job found the file first — perhaps while it was still being written, and so
-    // ledgered it short. What was stored is the truth: correct the row, and the count by the difference.
-    const row = registryStmts.getAttachment.get(args.userId, args.fileId) as
-      { size_bytes: number; workspace_id: string } | undefined;
-    if (row && row.size_bytes !== args.size) {
-      registryStmts.updateAttachmentSize.run({ uploader_user_id: args.userId, file_id: args.fileId, size_bytes: args.size });
-      if (measured) {
-        registryStmts.addUsedBytes.run({ user_id: args.userId, kind: 'attachments', delta: args.size - row.size_bytes, updated_at: now });
-      }
-    }
-    if (row && row.workspace_id !== args.workspaceId) {
-      registryStmts.setAttachmentWorkspace.run({ uploader_user_id: args.userId, file_id: args.fileId, workspace_id: args.workspaceId });
-    }
-  }
-  if (!measured) reconcileUserUsage(args.userId);
+export function confirmAttachment(row: Pick<AttachmentRow, 'attachment_id' | 'owner_user_id'>, size: number): boolean {
+  if (!registryStmts.getUserById.get(row.owner_user_id)) return false;
+  // An account never measured has no figure to move by this upload's size. It is measured first,
+  // while this row is still pending and so not part of the sum, and then moved.
+  attachmentsUsed(row.owner_user_id);
+  const confirm = registryStmts.confirmAttachment.run({ attachment_id: row.attachment_id, size_bytes: size });
+  if (confirm.changes !== 1) return false;
+  registryStmts.addUsedBytes.run({ user_id: row.owner_user_id, kind: 'attachments', delta: size, updated_at: Date.now() });
+  return true;
 }
 
 /**
- * Forget a deleted upload and give its bytes back to its owner. Returns what the ledger held for it,
- * or null when there was no row.
+ * Take an attachment out of the ledger and give a confirmed one's bytes back to its owner. Returns the
+ * row as it was, or null when there was none.
  */
-export function forgetUpload(userId: string, fileId: string): { size_bytes: number; owner_user_id: string } | null {
-  const row = registryStmts.getAttachment.get(userId, fileId) as { size_bytes: number; owner_user_id: string } | undefined;
+export function forgetAttachment(attachmentId: string): AttachmentRow | null {
+  const row = registryStmts.getAttachment.get(attachmentId) as AttachmentRow | undefined;
   if (!row) return null;
-  registryStmts.deleteAttachment.run(userId, fileId);
-  registryStmts.addUsedBytes.run({ user_id: row.owner_user_id, kind: 'attachments', delta: -row.size_bytes, updated_at: Date.now() });
+  registryStmts.deleteAttachment.run(attachmentId);
+  if (row.status === 'confirmed' && row.size_bytes !== null) {
+    registryStmts.addUsedBytes.run({ user_id: row.owner_user_id, kind: 'attachments', delta: -row.size_bytes, updated_at: Date.now() });
+  }
   return row;
+}
+
+/**
+ * Mark an attachment `deleted` and give a confirmed one's bytes back, keeping the row so the cleanup job
+ * can remove an object this process cannot (a bucket's).
+ */
+export function retireAttachment(attachmentId: string): void {
+  const row = registryStmts.getAttachment.get(attachmentId) as AttachmentRow | undefined;
+  if (!row || row.status === 'deleted') return;
+  registryStmts.markAttachmentDeleted.run(attachmentId);
+  if (row.status === 'confirmed' && row.size_bytes !== null) {
+    registryStmts.addUsedBytes.run({ user_id: row.owner_user_id, kind: 'attachments', delta: -row.size_bytes, updated_at: Date.now() });
+  }
 }
 
 /** Every account's usage as last reconciled; an account never reconciled has no entry. */
@@ -193,45 +211,10 @@ export function listUsageByUser(): Map<string, UsageTotals> {
 }
 
 /**
- * Bring the ledger in line with the files in `uploads/<userId>/` — a row for each file, its size as
- * stored, no row for a file that is gone — and return the bytes the account owns. A file is known by
- * its uploader's directory and its name in it, so two accounts' files never collide.
+ * What the account's confirmed attachments add up to. The ledger is the truth: a file on the disk
+ * without a row was never confirmed, and the cleanup job (lib/attachments.ts) removes it.
  */
 function reconcileAttachments(userId: string): number {
-  const dir = path.join(DATA_DIR, 'uploads', userId);
-  const onDisk = new Map<string, number>();
-  let entries: fs.Dirent[] = [];
-  try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    // No uploads directory: the user has never uploaded.
-  }
-  for (const e of entries) {
-    if (!e.isFile()) continue;
-    try {
-      onDisk.set(e.name, fs.statSync(path.join(dir, e.name)).size);
-    } catch {
-      // Gone between the listing and the stat.
-    }
-  }
-
-  const known = new Map(
-    (registryStmts.listAttachmentsByUploader.all(userId) as { file_id: string; size_bytes: number }[])
-      .map((r) => [r.file_id, r.size_bytes]),
-  );
-  const now = Date.now();
-  for (const [fileId, size] of onDisk) {
-    if (!known.has(fileId)) {
-      registryStmts.insertAttachment.run({
-        file_id: fileId, workspace_id: '', owner_user_id: userId, uploader_user_id: userId, size_bytes: size, created_at: now,
-      });
-    } else if (known.get(fileId) !== size) {
-      registryStmts.updateAttachmentSize.run({ uploader_user_id: userId, file_id: fileId, size_bytes: size });
-    }
-  }
-  for (const fileId of known.keys()) {
-    if (!onDisk.has(fileId)) registryStmts.deleteAttachment.run(userId, fileId);
-  }
   return (registryStmts.sumAttachmentsForOwner.get(userId) as { total: number }).total;
 }
 

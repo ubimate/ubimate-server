@@ -125,6 +125,8 @@ describe('auth router', () => {
     expect(registerBody.user.primary_workspace_id).toBe(initialWorkspaceId);
 
     const { registryStmts, parseUserProperties } = await import('../db/registry');
+    // The account that registered a Space with its key owns it (docs/ATTACHMENT-ENCRYPTION.md 5.1).
+    expect(registryStmts.getSpaceOwner.get(initialWorkspaceId)).toEqual({ owner_user_id: registerBody.user.id });
     const userRow = registryStmts.getUserByEmail.get(email) as {
       status: string;
       public_key: string | null;

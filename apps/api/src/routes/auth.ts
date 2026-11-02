@@ -302,6 +302,7 @@ authRouter.post('/register', authLimiter, async (req: Request, res: Response) =>
     wrapped_key: initialWrappedWorkspaceKey,
     granted_at: now,
   });
+  registryStmts.recordSpaceOwner.run({ workspace_id: initialWorkspaceId, owner_user_id: userId });
 
   // Mark this initial workspace as the user's protected "home" — it can never
   // be deleted and is the default target for quick-capture notes.

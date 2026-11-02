@@ -190,4 +190,53 @@ describe('workspaces router', () => {
     });
     expect(res.status).toBe(401);
   });
+
+  // ---------------------------------------------------------------------------
+  // Space ownership (docs/ATTACHMENT-ENCRYPTION.md 5.1, 13.2)
+  // ---------------------------------------------------------------------------
+
+  describe('the owner of a Space', () => {
+    const put = (workspaceId: string, userId: string, token: string, wrappedKey = 'k') =>
+      fetch(`${baseUrl}/api/workspaces/${workspaceId}/key/${userId}`, {
+        method: 'PUT', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ wrapped_key: wrappedKey }),
+      });
+    const ownerOf = async (workspaceId: string) => {
+      const { registryStmts } = await import('../db/registry');
+      return (registryStmts.getSpaceOwner.get(workspaceId) as { owner_user_id: string } | undefined)?.owner_user_id;
+    };
+
+    it('is whoever puts the first key of a Space on the server, for themselves', async () => {
+      const fresh = randomUUID();
+      expect(await ownerOf(fresh)).toBeUndefined();
+      expect((await put(fresh, USER_A, tokenA)).status).toBe(204);
+      expect(await ownerOf(fresh)).toBe(USER_A);
+    });
+
+    it('is not changed by a member who is given a key, who then puts keys, or by the owner putting its own again', async () => {
+      const fresh = randomUUID();
+      await put(fresh, USER_A, tokenA);
+      expect((await put(fresh, USER_B, tokenA, 'for-b')).status).toBe(204);
+      expect((await put(fresh, USER_A, tokenB, 'by-b')).status).toBe(204);
+      expect((await put(fresh, USER_A, tokenA, 'again')).status).toBe(204);
+      expect(await ownerOf(fresh)).toBe(USER_A);
+    });
+
+    it('is not claimed by someone who is refused: a non-member of a Space that has keys, or a first key for another account', async () => {
+      const fresh = randomUUID();
+      await put(fresh, USER_A, tokenA);
+      expect((await put(fresh, USER_B, tokenB)).status).toBe(403);
+      expect(await ownerOf(fresh)).toBe(USER_A);
+
+      const empty = randomUUID();
+      expect((await put(empty, USER_A, tokenB)).status).toBe(403);
+      expect(await ownerOf(empty)).toBeUndefined();
+    });
+
+    it('is unknown for a Space whose key was recorded before owners were: granting a key there names no owner', async () => {
+      // WORKSPACE_ID has its key row from the fixture, written straight into the table.
+      expect(await ownerOf(WORKSPACE_ID)).toBeUndefined();
+      expect((await put(WORKSPACE_ID, USER_B, tokenA)).status).toBe(204);
+      expect(await ownerOf(WORKSPACE_ID)).toBeUndefined();
+    });
+  });
 });
