@@ -5,7 +5,9 @@
  * Tests for workspace key management endpoints.
  *
  * GET /api/workspaces/:id/key          — fetch caller's wrapped key
- * PUT /api/workspaces/:id/key/:userId  — grant/update a key for another user
+ * PUT /api/workspaces/:id/key/:userId  — grant/update a key for another user (the Space's owner only)
+ *
+ * Rotation, the key chain and leaving are in workspaceRotation.test.ts.
  */
 
 import express from 'express';
@@ -65,6 +67,7 @@ describe('workspaces router', () => {
       wrapped_key: 'wrapped-key-for-a',
       granted_at: now,
     });
+    registryStmts.recordSpaceOwner.run({ workspace_id: WORKSPACE_ID, owner_user_id: USER_A });
 
     const { workspacesRouter } = await import('../routes/workspaces');
 
@@ -129,7 +132,7 @@ describe('workspaces router', () => {
   // PUT /api/workspaces/:id/key/:userId
   // ---------------------------------------------------------------------------
 
-  it('allows a key-holder to grant a key to another user', async () => {
+  it('allows the owner to grant a key to another user', async () => {
     const res = await fetch(`${baseUrl}/api/workspaces/${WORKSPACE_ID}/key/${USER_B}`, {
       method: 'PUT',
       headers: { Authorization: `Bearer ${tokenA}`, 'Content-Type': 'application/json' },
@@ -212,13 +215,24 @@ describe('workspaces router', () => {
       expect(await ownerOf(fresh)).toBe(USER_A);
     });
 
-    it('is not changed by a member who is given a key, who then puts keys, or by the owner putting its own again', async () => {
+    it('is not changed by a member who is given a key, or by the owner putting its own again', async () => {
       const fresh = randomUUID();
       await put(fresh, USER_A, tokenA);
       expect((await put(fresh, USER_B, tokenA, 'for-b')).status).toBe(204);
-      expect((await put(fresh, USER_A, tokenB, 'by-b')).status).toBe(204);
       expect((await put(fresh, USER_A, tokenA, 'again')).status).toBe(204);
       expect(await ownerOf(fresh)).toBe(USER_A);
+    });
+
+    it('is the only one who may write keys: a member given a key cannot write one, for anyone, itself included', async () => {
+      const fresh = randomUUID();
+      await put(fresh, USER_A, tokenA, 'owner-key');
+      await put(fresh, USER_B, tokenA, 'for-b');
+      expect((await put(fresh, USER_A, tokenB, 'by-b')).status).toBe(403);
+      expect((await put(fresh, USER_B, tokenB, 'by-b-for-b')).status).toBe(403);
+      const { registryStmts } = await import('../db/registry');
+      const keyOf = (u: string) => (registryStmts.getWorkspaceKeyForUser.get(fresh, u) as { wrapped_key: string }).wrapped_key;
+      expect(keyOf(USER_A)).toBe('owner-key');
+      expect(keyOf(USER_B)).toBe('for-b');
     });
 
     it('is not claimed by someone who is refused: a non-member of a Space that has keys, or a first key for another account', async () => {
@@ -232,11 +246,13 @@ describe('workspaces router', () => {
       expect(await ownerOf(empty)).toBeUndefined();
     });
 
-    it('is unknown for a Space whose key was recorded before owners were: granting a key there names no owner', async () => {
-      // WORKSPACE_ID has its key row from the fixture, written straight into the table.
-      expect(await ownerOf(WORKSPACE_ID)).toBeUndefined();
-      expect((await put(WORKSPACE_ID, USER_B, tokenA)).status).toBe(204);
-      expect(await ownerOf(WORKSPACE_ID)).toBeUndefined();
+    it('is unknown for a Space whose key row was written without one: nobody may grant keys there, and none is named', async () => {
+      const orphan = randomUUID();
+      const { registryStmts } = await import('../db/registry');
+      registryStmts.insertWorkspaceKey.run({ workspace_id: orphan, user_id: USER_A, wrapped_key: 'k', granted_at: Date.now() });
+      expect(await ownerOf(orphan)).toBeUndefined();
+      expect((await put(orphan, USER_B, tokenA)).status).toBe(403);
+      expect(await ownerOf(orphan)).toBeUndefined();
     });
   });
 });

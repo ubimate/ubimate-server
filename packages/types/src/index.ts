@@ -394,6 +394,10 @@ export interface WorkspaceKey {
   workspace_id: string;
   /** Base64 crypto_box_seal(workspace_content_key, user.x25519PublicKey). */
   wrapped_key: string;
+  /** The version of the Space key `wrapped_key` holds: the Space's current one. */
+  key_version: number;
+  /** True for the Space's owner after a member left, until the owner's client rotates the key. */
+  rotation_pending: boolean;
 }
 
 /** Response of POST /api/auth/register and POST /api/auth/login */

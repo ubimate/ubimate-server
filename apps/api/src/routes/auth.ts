@@ -4,13 +4,27 @@ import jwt from 'jsonwebtoken';
 import rateLimit from 'express-rate-limit';
 import { ed25519 } from '@noble/curves/ed25519.js';
 import { registryStmts, parseUserProperties, resolvePrimaryWorkspaceId } from '../db/registry';
-import type { UserRow, InvitationRow, WorkspaceKeyRow } from '../db/registry';
+import type { UserRow, InvitationRow, WorkspaceKeyRow, WorkspaceKeyStateRow } from '../db/registry';
 import { JWT_SECRET, JWT_EXPIRES_IN, requireAuth } from '../middleware/auth';
 import { getUserDb } from '../db/userDb';
 import { issueCaptchaChallenge, verifyCaptchaPayload } from '../lib/captcha';
 import type { AuthPayload } from '@ubimate/types';
 import { trackEvent } from '../analytics';
 import { newAccountDiskQuotaBytes, withDiskQuota } from '../lib/quota';
+
+/** The user's sealed Space keys as the auth endpoints return them (docs/ATTACHMENT-ENCRYPTION.md 5.1, 6). */
+function workspaceKeyEntries(userId: string) {
+  return (registryStmts.listWorkspaceKeysForUser.all(userId) as WorkspaceKeyRow[]).map((k) => {
+    const state = registryStmts.getKeyState.get(k.workspace_id) as WorkspaceKeyStateRow | undefined;
+    return {
+      workspace_id: k.workspace_id,
+      wrapped_key: k.wrapped_key,
+      key_version: k.key_version,
+      // Only the owner acts on this, so only the owner is told.
+      rotation_pending: state?.rotation_pending === 1 && state.owner_user_id === userId,
+    };
+  });
+}
 
 export const authRouter = Router();
 
@@ -403,10 +417,7 @@ authRouter.post('/login', authLimiter, async (req: Request, res: Response) => {
   });
 
   setSessionCookie(res, token, remember);
-  const workspaceKeys = (registryStmts.listWorkspaceKeysForUser.all(user.id) as WorkspaceKeyRow[]).map(k => ({
-    workspace_id: k.workspace_id,
-    wrapped_key: k.wrapped_key,
-  }));
+  const workspaceKeys = workspaceKeyEntries(user.id);
   res.json({
     user: { id: user.id, email: user.email, properties: parseUserProperties(user), created_at: user.created_at, public_key: user.public_key, primary_workspace_id: resolvePrimaryWorkspaceId(user.id) },
     workspace_keys: workspaceKeys,
@@ -483,10 +494,7 @@ authRouter.post('/login/token', authLimiter, async (req: Request, res: Response)
 
   res.json({
     user: { id: user.id, email: user.email, properties: parseUserProperties(user), created_at: user.created_at, public_key: user.public_key, primary_workspace_id: resolvePrimaryWorkspaceId(user.id) },
-    workspace_keys: (registryStmts.listWorkspaceKeysForUser.all(user.id) as WorkspaceKeyRow[]).map(k => ({
-      workspace_id: k.workspace_id,
-      wrapped_key: k.wrapped_key,
-    })),
+    workspace_keys: workspaceKeyEntries(user.id),
     token,
   });
 });
@@ -530,10 +538,7 @@ authRouter.get('/me', requireAuth, (req: Request, res: Response) => {
   }
   res.json({
     user: { id: user.id, email: user.email, properties: parseUserProperties(user), created_at: user.created_at, public_key: user.public_key ?? null, primary_workspace_id: resolvePrimaryWorkspaceId(user.id) },
-    workspace_keys: (registryStmts.listWorkspaceKeysForUser.all(user.id) as WorkspaceKeyRow[]).map(k => ({
-      workspace_id: k.workspace_id,
-      wrapped_key: k.wrapped_key,
-    })),
+    workspace_keys: workspaceKeyEntries(user.id),
   });
 });
 

@@ -6,6 +6,9 @@
  *   What lets a desktop that stays online pull another device's edits to pages it does not have open
  *   (SYNC.md): the relay only reaches pages a client has open. Throttled per user, since the relay
  *   stores roughly every keystroke batch; clients that do not listen for it ignore it.
+ * - `key-rotated` — a Space's key moved to a new version (docs/ATTACHMENT-ENCRYPTION.md 7.1): the member
+ *   refetches its key and chain before it writes more. Not throttled; rotations are rare.
+ * - `rotation-pending` — a member left a Space, so its owner's client should rotate the key (7.2).
  */
 import type { Response } from 'express';
 
@@ -41,6 +44,16 @@ function send(userId: string, event: string, data: string): void {
 /** Broadcast a tree-changed event to every SSE client belonging to `userId`. */
 export function broadcastTreeChanged(userId: string): void {
   send(userId, 'tree-changed', '{}');
+}
+
+/** Tell `userId`'s clients that Space `workspaceId` is now at key `version`. */
+export function broadcastKeyRotated(userId: string, workspaceId: string, version: number): void {
+  send(userId, 'key-rotated', JSON.stringify({ workspaceId, version }));
+}
+
+/** Tell the owner's clients that a member left `workspaceId`, so the key should be rotated. */
+export function broadcastRotationPending(userId: string, workspaceId: string): void {
+  send(userId, 'rotation-pending', JSON.stringify({ workspaceId }));
 }
 
 /** Per user: the ids waiting to be announced, and whether an announcement is scheduled. */

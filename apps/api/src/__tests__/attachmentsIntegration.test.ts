@@ -17,7 +17,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { generateContentKey } from '@ubimate/crypto';
+import { generateSpaceKey, type SpaceKey } from '@ubimate/crypto';
 import { UploadQuotaExceededError, createBearerHttpClient, type UbimateClient } from '../../../web/src/api/client';
 import { uploadEncrypted } from '../../../web/src/api/encryptedUpload';
 import { createAttachmentResolver } from '../../../web/src/api/attachmentResolver';
@@ -44,7 +44,7 @@ describe.each(MODES)('attachments end to end (%s mode)', (mode) => {
   let registry: typeof import('../db/registry');
   let lib: typeof import('../lib/attachments');
   let objectStore: typeof import('../lib/objectStore');
-  let spaceKey: Uint8Array;
+  let spaceKey: SpaceKey;
   const tokens: Record<string, string> = {};
   /** Every call the client made through `fetch`: where, and with which credentials. */
   let calls: { url: string; method: string; authorization?: string; credentials?: RequestCredentials }[] = [];
@@ -87,7 +87,7 @@ describe.each(MODES)('attachments end to end (%s mode)', (mode) => {
     registry.registryStmts.recordSpaceOwner.run({ workspace_id: WS, owner_user_id: OWNER });
     const jwt = (await import('jsonwebtoken')).default;
     for (const id of [OWNER, GUEST, OUTSIDER]) tokens[id] = jwt.sign({ sub: id, email: `${id}@example.com` }, 'int-test-secret', { expiresIn: '1h' });
-    spaceKey = await generateContentKey();
+    spaceKey = await generateSpaceKey(WS);
 
     const { attachmentsRouter } = await import('../routes/attachments');
     const { usageRouter } = await import('../routes/usage');

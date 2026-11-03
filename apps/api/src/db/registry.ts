@@ -86,6 +86,25 @@ export interface WorkspaceKeyRow {
   /** Base64-encoded sealed workspace content key. */
   wrapped_key: string;
   granted_at: number;
+  /** The version of the Space key `wrapped_key` holds: always the Space's current one (docs/ATTACHMENT-ENCRYPTION.md 5.1). */
+  key_version: number;
+}
+
+/** What the server records about a Space's key beyond its members' rows. */
+export interface WorkspaceKeyStateRow {
+  workspace_id: string;
+  current_version: number;
+  /** 1 after a member left, until the owner's client rotates (7.2). */
+  rotation_pending: number;
+  owner_user_id: string;
+}
+
+export interface WorkspaceKeyChainRow {
+  workspace_id: string;
+  key_version: number;
+  /** K_{key_version - 1} under K_{key_version} (4.4). */
+  wrapped_previous: string;
+  created_at: number;
 }
 
 export type AttachmentKind = 'image' | 'video' | 'audio' | 'file';
@@ -106,12 +125,10 @@ export interface AttachmentRow {
   created_at: number;
 }
 
-/**
- * The version of a Space's key that new content is written under. Every Space is at version 1 until
- * key versions are built (docs/ATTACHMENT-ENCRYPTION.md 5.1, step 5), which gives this a table to read.
- */
-export function currentKeyVersion(_workspaceId: string): number {
-  return 1;
+/** The version of a Space's key that new content is written under; a Space with no state row is at version 1. */
+export function currentKeyVersion(workspaceId: string): number {
+  const row = registryStmts.getKeyState.get(workspaceId) as WorkspaceKeyStateRow | undefined;
+  return row?.current_version ?? 1;
 }
 
 export interface UserRow {
@@ -192,9 +209,14 @@ registryDb.exec(`
     user_id       TEXT    NOT NULL,
     wrapped_key   TEXT    NOT NULL,
     granted_at    INTEGER NOT NULL DEFAULT (unixepoch()),
+    key_version   INTEGER NOT NULL DEFAULT 1,
     PRIMARY KEY (workspace_id, user_id)
   );
 `);
+// A database made before key versions has no such column.
+if (!(registryDb.pragma('table_info(workspace_keys)') as { name: string }[]).some((c) => c.name === 'key_version')) {
+  registryDb.exec(`ALTER TABLE workspace_keys ADD COLUMN key_version INTEGER NOT NULL DEFAULT 1`);
+}
 registryDb.exec(`
   CREATE INDEX IF NOT EXISTS idx_workspace_keys_user ON workspace_keys(user_id);
 `);
@@ -214,6 +236,18 @@ registryDb.exec(`
     current_version  INTEGER NOT NULL DEFAULT 1,
     rotation_pending INTEGER NOT NULL DEFAULT 0,
     owner_user_id    TEXT    NOT NULL
+  );
+`);
+
+// The key chain: for each version v > 1 of a Space's key, K_{v-1} sealed under K_v (docs/ATTACHMENT-ENCRYPTION.md 4.4).
+// A member holds only the current key and walks this down to read older content.
+registryDb.exec(`
+  CREATE TABLE IF NOT EXISTS workspace_key_chain (
+    workspace_id      TEXT    NOT NULL,
+    key_version       INTEGER NOT NULL,
+    wrapped_previous  TEXT    NOT NULL,
+    created_at        INTEGER NOT NULL,
+    PRIMARY KEY (workspace_id, key_version)
   );
 `);
 
@@ -393,14 +427,36 @@ export const registryStmts = {
   listUsers: registryDb.prepare(`SELECT id, email, properties, status, created_at, is_demo, demo_expires_at, freetrial_token, user_type FROM users`),
 
   // Workspace keys
+  // A Space's first key, which is at version 1 (the column's default).
   insertWorkspaceKey: registryDb.prepare(`
     INSERT INTO workspace_keys (workspace_id, user_id, wrapped_key, granted_at)
     VALUES (@workspace_id, @user_id, @wrapped_key, @granted_at)
   `),
+  // A key written for a member is always at the Space's current version.
   upsertWorkspaceKey: registryDb.prepare(`
-    INSERT INTO workspace_keys (workspace_id, user_id, wrapped_key, granted_at)
-    VALUES (@workspace_id, @user_id, @wrapped_key, @granted_at)
-    ON CONFLICT(workspace_id, user_id) DO UPDATE SET wrapped_key = excluded.wrapped_key
+    INSERT INTO workspace_keys (workspace_id, user_id, wrapped_key, granted_at, key_version)
+    VALUES (@workspace_id, @user_id, @wrapped_key, @granted_at,
+            COALESCE((SELECT current_version FROM workspace_key_state WHERE workspace_id = @workspace_id), 1))
+    ON CONFLICT(workspace_id, user_id) DO UPDATE SET wrapped_key = excluded.wrapped_key, key_version = excluded.key_version
+  `),
+  listWorkspaceMembers: registryDb.prepare(`SELECT user_id FROM workspace_keys WHERE workspace_id = ? ORDER BY user_id`),
+  // Key rotation (docs/ATTACHMENT-ENCRYPTION.md 7): state, chain, and the rows of one rotation.
+  getKeyState: registryDb.prepare(`SELECT * FROM workspace_key_state WHERE workspace_id = ?`),
+  setKeyVersion: registryDb.prepare(`
+    UPDATE workspace_key_state SET current_version = @version, rotation_pending = 0 WHERE workspace_id = @workspace_id
+  `),
+  setRotationPending: registryDb.prepare(`UPDATE workspace_key_state SET rotation_pending = 1 WHERE workspace_id = ?`),
+  insertKeyChainEntry: registryDb.prepare(`
+    INSERT INTO workspace_key_chain (workspace_id, key_version, wrapped_previous, created_at)
+    VALUES (@workspace_id, @key_version, @wrapped_previous, @created_at)
+  `),
+  listKeyChain: registryDb.prepare(`
+    SELECT * FROM workspace_key_chain WHERE workspace_id = ? ORDER BY key_version DESC
+  `),
+  rewriteWorkspaceKey: registryDb.prepare(`
+    INSERT INTO workspace_keys (workspace_id, user_id, wrapped_key, granted_at, key_version)
+    VALUES (@workspace_id, @user_id, @wrapped_key, @granted_at, @key_version)
+    ON CONFLICT(workspace_id, user_id) DO UPDATE SET wrapped_key = excluded.wrapped_key, key_version = excluded.key_version
   `),
   getWorkspaceKeyForUser: registryDb.prepare(`
     SELECT * FROM workspace_keys WHERE workspace_id = ? AND user_id = ?
