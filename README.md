@@ -10,9 +10,10 @@ Self-hostable sync and collaboration server for [Ubimate](https://ubimate.com) �
 
 `ubimate-server` is the backend that powers real-time collaboration and multi-device sync for Ubimate clients. It combines:
 
-- **REST API** (Express) — authentication, workspace management, document metadata, file uploads
+- **REST API** (Express) — authentication, workspace management, document metadata, encrypted file attachments
 - **Real-time collaboration** (Hocuspocus + Yjs) — conflict-free, multiplayer editing over WebSocket
-- **Persistence** (SQLite via better-sqlite3) — all data stays on your machine; no external database required
+- **Persistence** (SQLite via better-sqlite3) — documents, users and the attachment ledger stay on your machine; no external database required
+- **Object storage** (any S3-compatible bucket) — attachment bytes, always encrypted on the device before upload, so the bucket only ever holds ciphertext
 - **Admin panel** — web-based interface for managing users and monitoring disk usage
 
 When self-hosted, Ubimate clients connect to your instance instead of the Ubimate cloud.
@@ -26,6 +27,7 @@ For a detailed explanation of the end-to-end encryption model and the Yjs-based 
 - Node.js 20+
 - pnpm 8+
 - Docker & Docker Compose (for the recommended deployment path)
+- An S3-compatible bucket for attachments. The Docker Compose file bundles one (SeaweedFS); for a manual setup see [Object storage](#object-storage-attachments)
 
 ---
 
@@ -33,7 +35,9 @@ For a detailed explanation of the end-to-end encryption model and the Yjs-based 
 
 ```bash
 cp .env.example .env
-# Edit .env — at minimum set JWT_SECRET, APP_URL, and the ADMIN_* vars
+# Edit .env — at minimum set JWT_SECRET, APP_URL, the ADMIN_* vars,
+# and S3_ACCESS_KEY / S3_SECRET_KEY (any values, e.g. `openssl rand -hex 16`;
+# the bundled SeaweedFS bucket is created with them)
 docker compose up -d
 ```
 
@@ -48,7 +52,7 @@ Point your Ubimate client at your server by setting the server URL in the app se
 ```bash
 pnpm install
 cp .env.example apps/api/.env
-# Edit apps/api/.env
+# Edit apps/api/.env (in production also set the S3_* variables, see below)
 pnpm dev
 ```
 
@@ -66,7 +70,7 @@ All configuration is via environment variables. Copy `.env.example` to `.env` an
 | `ADMIN_PASSWORD` | Yes | Admin account password |
 | `ADMIN_EMAIL` | Yes | Admin account email |
 | `API_PORT` | No | REST API port (default: `3001`) |
-| `DATA_DIR` | No | Path for SQLite DB and uploads (default: `./data`) |
+| `DATA_DIR` | No | Path for the SQLite database (default: `./data`) |
 | `REQUIRE_INVITATION` | No | Set to `true` to restrict registration to invited users |
 | `INVITATION_TTL_DAYS` | No | Invitation link expiry in days (default: `7`) |
 | `SMTP_HOST` | No | SMTP server host — leave blank to disable email |
@@ -75,9 +79,41 @@ All configuration is via environment variables. Copy `.env.example` to `.env` an
 | `SMTP_USER` | No | SMTP username |
 | `SMTP_PASS` | No | SMTP password |
 | `SMTP_FROM` | No | From address for outbound emails |
-| `MAX_IMAGE_UPLOAD_MB` | No | Max image upload size in MB (default: `10`) |
-| `MAX_AUDIO_UPLOAD_MB` | No | Max audio upload size in MB (default: `50`) |
-| `MAX_VIDEO_UPLOAD_MB` | No | Max video upload size in MB (default: `200`) |
+| `MAX_IMAGE_UPLOAD_MB` | No | Max image upload size in MB (default: `20`) |
+| `MAX_AUDIO_UPLOAD_MB` | No | Max audio upload size in MB (default: `100`) |
+| `MAX_VIDEO_UPLOAD_MB` | No | Max video upload size in MB (default: `50`) |
+| `UPLOAD_MAX_SIZE_MB` | No | Max size in MB for other file attachments (default: `10`) |
+| `S3_ENDPOINT` | Production | URL the API reaches the bucket at, e.g. `https://eu2.contabostorage.com` |
+| `S3_BUCKET` | Production | Bucket name |
+| `S3_ACCESS_KEY` | Production | S3 access key ID the API uses |
+| `S3_SECRET_KEY` | Production | S3 secret access key the API uses |
+| `S3_PUBLIC_ENDPOINT` | No | Where **browsers** reach the bucket, if that differs from `S3_ENDPOINT` (default: `S3_ENDPOINT`). Signed URLs name this host |
+| `S3_REGION` | No | Region string (default: `eu-central-1`; many providers ignore it) |
+| `S3_CLEANUP_ACCESS_KEY` | No | Access key of a separate credential that may delete objects (see below) |
+| `S3_CLEANUP_SECRET_KEY` | No | Secret of the cleanup credential |
+| `S3_PRESIGN_EXPIRY_PUT` | No | Upload URL lifetime in seconds (default: `900`) |
+| `S3_PRESIGN_EXPIRY_GET` | No | Download URL lifetime in seconds (default: `300`) |
+
+---
+
+## Object storage (attachments)
+
+Attachments (images, audio, video, files) are stored in an S3-compatible bucket, not on the server's disk. Clients encrypt each file on the device and upload it straight to the bucket with a short-lived signed URL; downloads go through signed URLs too, handed out only after a workspace-membership check. The server never proxies attachment bytes and never sees a file's name or type, only a coarse kind, a size and a state.
+
+**Required in production.** With `NODE_ENV=production` the API refuses to start unless `S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY` and `S3_SECRET_KEY` are all set, and says which are missing. Outside production, with none of them set, attachments fall back to the local disk — fine for development and tests, not a way to run a server.
+
+- **Docker Compose:** `docker-compose.yml` runs SeaweedFS' S3 gateway next to the app and creates the bucket. Set `S3_ACCESS_KEY` and `S3_SECRET_KEY` in `.env`, and `S3_PUBLIC_ENDPOINT` to the address browsers will use to reach the gateway (default `http://localhost:8333`); put it behind HTTPS in production.
+- **Your own store** (AWS S3, Contabo, MinIO, Ceph, …): set the four required variables to point at it. The client uses path-style addressing, which Contabo and most self-hosted stores need. If the store honours CORS rules, allow `PUT` and `GET` from the app's origin, and the `Content-Type` header. The bucket must be reachable from browsers at `S3_PUBLIC_ENDPOINT`, over HTTPS when the app is.
+- **Contabo:** the endpoint is `https://{region}.contabostorage.com`, e.g. `https://eu2.contabostorage.com`.
+
+### Keeping the API from deleting
+
+The API only ever deletes objects through its cleanup job. If you want the bucket itself to enforce that, use two credentials:
+
+- `S3_ACCESS_KEY` / `S3_SECRET_KEY`: the API's credential, with read and write but a bucket policy denying `s3:DeleteObject` (and `s3:DeleteObjectVersion`).
+- `S3_CLEANUP_ACCESS_KEY` / `S3_CLEANUP_SECRET_KEY`: the credential the cleanup job deletes with.
+
+If you leave the cleanup pair unset, the API's own credential is used and the server logs a warning at startup. On Contabo (Ceph RGW), a bucket policy does not restrict the bucket **owner**, only other users, so the restricted user's keys go in `S3_ACCESS_KEY` and the owner's in `S3_CLEANUP_*`. Leave bucket versioning off: with it on, a delete keeps the old bytes as non-current versions and cleanup stops freeing space unless a lifecycle rule expires them.
 
 ---
 
@@ -147,10 +183,9 @@ All data is stored under `DATA_DIR` (default: `./data`):
 ```
 data/
   ubimate.db      ← SQLite database (documents, workspaces, users, Yjs updates)
-  uploads/        ← uploaded images, audio, and video files
 ```
 
-Back up the entire `data/` directory to preserve all content.
+Back up the entire `data/` directory to preserve the database. Attachments live in your bucket, so back that up (or enable your provider's redundancy) as well.
 
 ---
 
