@@ -780,6 +780,12 @@ importers:
       '@tiptap/extension-link':
         specifier: 2.27.2
         version: 2.27.2(@tiptap/core@2.27.2)(@tiptap/pm@2.27.2)
+      '@tiptap/extension-subscript':
+        specifier: 2.27.2
+        version: 2.27.2(@tiptap/core@2.27.2)
+      '@tiptap/extension-superscript':
+        specifier: 2.27.2
+        version: 2.27.2(@tiptap/core@2.27.2)
       '@tiptap/extension-table':
         specifier: 2.27.2
         version: 2.27.2(@tiptap/core@2.27.2)(@tiptap/pm@2.27.2)
@@ -4121,6 +4127,22 @@ packages:
       '@tiptap/core': 2.27.2(@tiptap/pm@2.27.2)
     dev: false
 
+  /@tiptap/extension-subscript@2.27.2(@tiptap/core@2.27.2):
+    resolution: {integrity: sha512-x2Oz7hrI4KvzzB9pWChFRm6JnKdYAUQDyrlSROngtzXT7VpNQNoD5s8OlICzDeNsaRKzhR8omIz2z17S1VB48g==}
+    peerDependencies:
+      '@tiptap/core': ^2.7.0
+    dependencies:
+      '@tiptap/core': 2.27.2(@tiptap/pm@2.27.2)
+    dev: false
+
+  /@tiptap/extension-superscript@2.27.2(@tiptap/core@2.27.2):
+    resolution: {integrity: sha512-VTGJDuNqdesibSVW94Q71VaGVGr/bwBppdaNLn7k6beOegALfIH7ncArlkD/eihOlJ2qaWiT7FoWNLTb/Fdv1w==}
+    peerDependencies:
+      '@tiptap/core': ^2.7.0
+    dependencies:
+      '@tiptap/core': 2.27.2(@tiptap/pm@2.27.2)
+    dev: false
+
   /@tiptap/extension-table-cell@2.27.2(@tiptap/core@2.27.2):
     resolution: {integrity: sha512-9Lk46MjZMFzVZfOj9Kd7VgC6Odt6vmEhlCYVumErShUY7EkFqCw3b2IYoUtQkntfOEx/Afnhff/okNQwPsJeUA==}
     peerDependencies:
@@ -5188,7 +5210,7 @@ packages:
       '@vitest/spy': 4.1.4
       estree-walker: 3.0.3
       magic-string: 0.30.21
-      vite: 7.3.1(@types/node@22.15.0)(tsx@4.19.3)
+      vite: 7.3.1
     dev: true
 
   /@vitest/pretty-format@4.1.4:
