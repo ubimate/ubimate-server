@@ -294,6 +294,8 @@ const AdminDashboard: React.FC<{ api: ReturnType<typeof useAdminApi>; onLogout: 
   const [quotaUnit, setQuotaUnit] = useState<QuotaUnit>('GB');
   const [quotaSaving, setQuotaSaving] = useState(false);
   const [messageApi, contextHolder] = message.useMessage();
+  // The hook, not the static Modal.confirm: antd 5's static methods render nothing under React 19.
+  const [modalApi, modalContextHolder] = Modal.useModal();
 
   const loadUsers = useCallback(async () => {
     setLoadingUsers(true);
@@ -352,7 +354,7 @@ const AdminDashboard: React.FC<{ api: ReturnType<typeof useAdminApi>; onLogout: 
   }
 
   function confirmDeleteUser(user: AdminUser) {
-    Modal.confirm({
+    void modalApi.confirm({
       title: 'Delete user',
       content: `Are you sure you want to delete ${user.email}? This will permanently remove the account and all their data.`,
       okText: 'Delete',
@@ -574,6 +576,7 @@ const AdminDashboard: React.FC<{ api: ReturnType<typeof useAdminApi>; onLogout: 
   return (
     <div className="admin-page">
       {contextHolder}
+      {modalContextHolder}
       <div className="admin-header">
         <Title level={2}>Ubimate Admin</Title>
         <Button onClick={onLogout}>Sign out</Button>
