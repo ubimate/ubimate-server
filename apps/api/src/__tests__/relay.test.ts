@@ -246,6 +246,16 @@ describe('yjs relay', () => {
     third.ws.close();
   });
 
+  it("disconnectUser closes the user's sockets, so a deleted account cannot write its database back", async () => {
+    const { ws } = await connectAndSync();
+    const closed = new Promise<number>((resolve) => ws.on('close', (code) => resolve(code)));
+
+    const { relay } = await import('../relay');
+    relay.disconnectUser(TEST_USER_ID);
+
+    expect(await closed).toBe(4003);
+  });
+
   it('rejects a PING sent before HELLO', async () => {
     const ws = new WebSocket(wsUrl);
     const closeCode = await new Promise<number>((resolve, reject) => {

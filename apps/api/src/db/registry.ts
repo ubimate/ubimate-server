@@ -520,6 +520,10 @@ export const registryStmts = {
     SELECT * FROM attachments WHERE status = 'pending' AND created_at < ?
   `),
   listDeletedAttachments: registryDb.prepare(`SELECT * FROM attachments WHERE status = 'deleted'`),
+  listAttachmentsOwnedBy: registryDb.prepare(`SELECT * FROM attachments WHERE owner_user_id = ?`),
+  listSpacesOwnedBy: registryDb.prepare(`SELECT workspace_id FROM workspace_key_state WHERE owner_user_id = ?`),
+  deleteKeyState: registryDb.prepare(`DELETE FROM workspace_key_state WHERE workspace_id = ?`),
+  deleteKeyChain: registryDb.prepare(`DELETE FROM workspace_key_chain WHERE workspace_id = ?`),
   sumAttachmentsForOwner: registryDb.prepare(`
     SELECT COALESCE(SUM(size_bytes), 0) AS total FROM attachments WHERE owner_user_id = ? AND status = 'confirmed'
   `),

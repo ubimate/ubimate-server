@@ -149,6 +149,25 @@ function parseHello(payload: Uint8Array): { token: string; documentName: string 
 
 export const relay = {
   /**
+   * Close every socket of `userId` (the account was deleted). Code 4003 is what a reconnect would get
+   * anyway, since verifyToken no longer finds the user; closing now stops a socket that is already
+   * subscribed from writing, which would recreate the deleted database through getUserDb.
+   */
+  disconnectUser(userId: string): void {
+    for (const set of rooms.values()) {
+      for (const member of [...set]) {
+        if (member.userId !== userId) continue;
+        leaveRoom(member);
+        try {
+          member.ws.close(4003, 'auth-failed');
+        } catch {
+          // Already closed.
+        }
+      }
+    }
+  },
+
+  /**
    * Fan a blob that reached storage through the REST API out to the live
    * clients of the document, exactly as if it had arrived as an UPDATE frame.
    *

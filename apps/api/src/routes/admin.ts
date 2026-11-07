@@ -17,6 +17,7 @@ import {
 import { registryStmts, getUserType } from '../db/registry';
 import type { InvitationRow, UserRow } from '../db/registry';
 import { sendActivationEmail, smtpConfigured } from '../email';
+import { purgeUser } from '../lib/userPurge';
 import { getQuotaBytes, isValidQuotaBytes, listUsageByUser, withDiskQuota } from '../lib/quota';
 
 const DATA_DIR = process.env.DATA_DIR ?? path.join(__dirname, '../../data');
@@ -174,7 +175,7 @@ adminRouter.get('/users', (_req: Request, res: Response) => {
 // ---------------------------------------------------------------------------
 // DELETE /api/admin/users/:id
 // ---------------------------------------------------------------------------
-adminRouter.delete('/users/:id', (req: Request, res: Response) => {
+adminRouter.delete('/users/:id', async (req: Request, res: Response) => {
   const { id } = req.params;
 
   // `listUsers.all()` is untyped; these are the two columns the code below reads,
@@ -187,15 +188,23 @@ adminRouter.delete('/users/:id', (req: Request, res: Response) => {
     return;
   }
 
-  // Write a tombstone file preserving the deleted user's metadata.
+  // Everything the server holds for the account goes (lib/userPurge.ts). Nothing is deleted when an
+  // attachment in object storage cannot be removed: answer 502 and let the admin try again.
+  const result = await purgeUser(id);
+  if (!result.ok) {
+    res.status(502).json({ error: result.error });
+    return;
+  }
+
+  // A tombstone keeps the registry row (email, type, dates) as a record that the account existed.
   const tombstone = {
     ...(row as Record<string, unknown>),
     deleted_at: Date.now(),
   };
-  const tombstonePath = path.join(DATA_DIR, 'users', `${id}_tombstone.json`);
-  fs.writeFileSync(tombstonePath, JSON.stringify(tombstone, null, 2));
+  const usersDir = path.join(DATA_DIR, 'users');
+  fs.mkdirSync(usersDir, { recursive: true });
+  fs.writeFileSync(path.join(usersDir, `${id}_tombstone.json`), JSON.stringify(tombstone, null, 2));
 
-  registryStmts.deleteUser.run(id);
   trackEvent('user-deleted', { type: getUserType(row) });
 
   res.status(204).send();

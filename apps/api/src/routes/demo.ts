@@ -10,18 +10,17 @@
  */
 import { Router, Request, Response } from 'express';
 import { randomUUID, randomBytes } from 'node:crypto';
-import fs from 'node:fs';
-import path from 'node:path';
 import jwt from 'jsonwebtoken';
 import rateLimit from 'express-rate-limit';
 import { trackEvent } from '../analytics';
 import { issueCaptchaChallenge, verifyCaptchaPayload } from '../lib/captcha';
 import { registryStmts, getUserType } from '../db/registry';
 import type { UserRow } from '../db/registry';
-import { closeUserDb, getUserDb } from '../db/userDb';
+import { getUserDb } from '../db/userDb';
 import { JWT_SECRET } from '../middleware/auth';
 import { requireAuth } from '../middleware/auth';
 import { seedDemoWorkspace } from '../db/demoSeeder';
+import { purgeUser } from '../lib/userPurge';
 
 // ---------------------------------------------------------------------------
 // Config
@@ -35,7 +34,6 @@ const MAX_DEMO_USERS           = process.env.MAX_DEMO_USERS !== undefined
   ? parseInt(process.env.MAX_DEMO_USERS, 10)
   : 200;
 const DEMO_FREETRIAL_DAYS      = Number(process.env.DEMO_FREETRIAL_DAYS)      || 14;
-const DATA_DIR = process.env.DATA_DIR ?? path.join(__dirname, '../../data');
 
 const SESSION_COOKIE = 'nf_session';
 const COOKIE_BASE = {
@@ -161,7 +159,7 @@ demoRouter.post('/provision', demoLimiter, async (req: Request, res: Response) =
 // trial period, so the request is silently ignored (204 no-op).
 // ---------------------------------------------------------------------------
 
-demoRouter.post('/end-session', requireAuth, (req: Request, res: Response) => {
+demoRouter.post('/end-session', requireAuth, async (req: Request, res: Response) => {
   if (!req.isDemo) {
     res.sendStatus(204);
     return;
@@ -179,16 +177,14 @@ demoRouter.post('/end-session', requireAuth, (req: Request, res: Response) => {
     return;
   }
 
-  // Immediate purge — same logic as the hourly cleanup.
-  registryStmts.deleteAllWorkspaceKeysForUser.run(req.userId);
-  registryStmts.deleteUser.run(req.userId);
-  closeUserDb(req.userId);
-  const dbPath = path.join(DATA_DIR, 'users', `${req.userId}.db`);
-  try { fs.unlinkSync(dbPath); } catch { /* already removed */ }
-  try { fs.unlinkSync(`${dbPath}-shm`); } catch { /* ignore */ }
-  try { fs.unlinkSync(`${dbPath}-wal`); } catch { /* ignore */ }
-  const uploadsDir = path.join(DATA_DIR, 'uploads', req.userId);
-  try { fs.rmSync(uploadsDir, { recursive: true, force: true }); } catch { /* ignore */ }
+  // Immediate purge — same as the hourly cleanup. If it cannot finish (an attachment in object storage
+  // would not delete), the account is left whole and the hourly cleanup takes it once it expires.
+  const result = await purgeUser(req.userId);
+  if (!result.ok) {
+    console.warn(`[demo] could not purge ${req.userId} on session end: ${result.error}`);
+    res.sendStatus(204);
+    return;
+  }
 
   console.log(`[demo] purged demo account ${req.userId} on session end`);
   res.sendStatus(204);
@@ -198,27 +194,26 @@ demoRouter.post('/end-session', requireAuth, (req: Request, res: Response) => {
 // Cleanup helpers — called by scheduleDemoCleanup() in index.ts
 // ---------------------------------------------------------------------------
 
-export function runDemoCleanup(): void {
+/** Purge every expired demo account (lib/userPurge.ts). One that cannot be purged now is tried next run. */
+export async function runDemoCleanup(): Promise<void> {
   const expired = registryStmts.listExpiredDemoUsers.all(Date.now()) as { id: string }[];
+  let purged = 0;
   for (const { id } of expired) {
-    registryStmts.deleteAllWorkspaceKeysForUser.run(id);
-    registryStmts.deleteUser.run(id);
-    closeUserDb(id);
-    const dbPath = path.join(DATA_DIR, 'users', `${id}.db`);
-    try { fs.unlinkSync(dbPath); } catch { /* already removed */ }
-    try { fs.unlinkSync(`${dbPath}-shm`); } catch { /* ignore */ }
-    try { fs.unlinkSync(`${dbPath}-wal`); } catch { /* ignore */ }
-    const uploadsDir = path.join(DATA_DIR, 'uploads', id);
-    try { fs.rmSync(uploadsDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    const result = await purgeUser(id);
+    if (result.ok) purged++;
+    else console.warn(`[demo] could not purge ${id}: ${result.error}`);
   }
-  if (expired.length > 0) {
-    console.log(`[demo] purged ${expired.length} expired demo account(s)`);
+  if (purged > 0) {
+    console.log(`[demo] purged ${purged} expired demo account(s)`);
   }
 }
 
 export function scheduleDemoCleanup(): void {
-  runDemoCleanup();
-  setInterval(runDemoCleanup, 60 * 60 * 1000);
+  const run = (): void => {
+    runDemoCleanup().catch((err) => console.warn('[demo] cleanup failed:', err));
+  };
+  run();
+  setInterval(run, 60 * 60 * 1000);
 }
 
 // ---------------------------------------------------------------------------

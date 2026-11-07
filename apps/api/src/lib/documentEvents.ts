@@ -29,6 +29,20 @@ export function addDocumentEventClient(userId: string, res: Response): () => voi
   };
 }
 
+/** End every event stream of `userId` (the account was deleted). */
+export function closeDocumentEventClients(userId: string): void {
+  const clients = sseClients.get(userId);
+  if (!clients) return;
+  sseClients.delete(userId);
+  for (const client of clients) {
+    try {
+      client.end();
+    } catch {
+      // Already closed.
+    }
+  }
+}
+
 function send(userId: string, event: string, data: string): void {
   const clients = sseClients.get(userId);
   if (!clients) return;

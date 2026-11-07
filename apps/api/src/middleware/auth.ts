@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { getUserDb } from '../db/userDb';
 import type { UserDbHandle } from '../db/userDb';
+import { registryStmts } from '../db/registry';
 
 export const JWT_SECRET = process.env.JWT_SECRET ?? (() => {
   if (process.env.NODE_ENV === 'production') {
@@ -59,6 +60,12 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
   }
   try {
     const payload = jwt.verify(token, JWT_SECRET) as { sub: string; email: string; is_demo?: boolean };
+    // A token outlives a deleted account. Without this check getUserDb below would create an empty
+    // database for it, and the request would write into it.
+    if (!registryStmts.getUserById.get(payload.sub)) {
+      res.status(401).json({ error: 'Invalid or expired token' });
+      return;
+    }
     req.userId = payload.sub;
     req.userEmail = payload.email;
     req.isDemo = payload.is_demo === true;

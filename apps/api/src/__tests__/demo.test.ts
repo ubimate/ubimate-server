@@ -265,7 +265,7 @@ describe('runDemoCleanup', () => {
     const before = registryStmts.listExpiredDemoUsers.all(Date.now()) as { id: string }[];
     expect(before.some((r) => r.id === userId)).toBe(true);
 
-    runDemoCleanup();
+    await runDemoCleanup();
 
     // Row should be gone
     const after = registryStmts.listExpiredDemoUsers.all(Date.now()) as { id: string }[];
@@ -291,7 +291,7 @@ describe('runDemoCleanup', () => {
       demo_expires_at: futureExpiry,
     });
 
-    runDemoCleanup();
+    await runDemoCleanup();
 
     // `getUserById` may not exist on every build, so the check that matters is the
     // one below: the user must not appear in the expired list.
