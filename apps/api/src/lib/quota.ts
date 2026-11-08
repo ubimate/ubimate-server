@@ -250,7 +250,7 @@ export function reconcileUserUsage(userId: string): UsageTotals | null {
 
 /** Reconcile every real account, yielding between them so a large server keeps answering requests. */
 export async function reconcileAllUsage(): Promise<number> {
-  const users = (registryStmts.listUsers.all() as { id: string; is_demo: number }[]).filter((u) => u.is_demo !== 1);
+  const users = registryStmts.listUsers.all() as { id: string }[];
   for (const u of users) {
     try {
       reconcileUserUsage(u.id);

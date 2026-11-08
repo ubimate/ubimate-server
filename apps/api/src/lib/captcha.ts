@@ -1,8 +1,8 @@
 /**
  * Shared ALTCHA proof-of-work captcha helpers.
  *
- * Used to protect public, unauthenticated endpoints (demo provisioning and
- * account registration) from automated abuse. ALTCHA is a self-hosted,
+ * Used to protect account registration, a public, unauthenticated endpoint,
+ * from automated abuse. ALTCHA is a self-hosted,
  * privacy-friendly proof-of-work scheme — no third-party widget, so it works
  * identically in a browser and inside a Tauri WebView (the client solves it
  * with `crypto.subtle`).

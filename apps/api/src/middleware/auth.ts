@@ -25,8 +25,6 @@ declare global {
       userId: string;
       userEmail: string;
       userDbHandle: UserDbHandle;
-      /** True when the session belongs to an ephemeral demo account. */
-      isDemo: boolean;
     }
   }
 }
@@ -59,7 +57,7 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
     return;
   }
   try {
-    const payload = jwt.verify(token, JWT_SECRET) as { sub: string; email: string; is_demo?: boolean };
+    const payload = jwt.verify(token, JWT_SECRET) as { sub: string; email: string };
     // A token outlives a deleted account. Without this check getUserDb below would create an empty
     // database for it, and the request would write into it.
     if (!registryStmts.getUserById.get(payload.sub)) {
@@ -68,7 +66,6 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
     }
     req.userId = payload.sub;
     req.userEmail = payload.email;
-    req.isDemo = payload.is_demo === true;
     req.userDbHandle = getUserDb(payload.sub);
     next();
   } catch {

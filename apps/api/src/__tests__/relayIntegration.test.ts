@@ -13,8 +13,8 @@
  *
  * The provider is imported across the app boundary on purpose: both halves of
  * the protocol have to run in one process for the test to mean anything. It
- * runs unencrypted (the demo-workspace path) so stored blobs are readable Yjs
- * bytes; the encryption layer is covered by the e2e encryption specs.
+ * runs encrypted, as every provider does: what the server stored is opened with
+ * the Space key before it is compared, and checked not to hold the plaintext.
  */
 
 import { createServer, type Server } from 'http';
@@ -26,14 +26,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WebSocketServer, WebSocket as WsWebSocket } from 'ws';
 import * as Y from 'yjs';
 import { CloudRelayProvider } from '../../../web/src/api/CloudRelayProvider';
+import { openBytes } from '../../../web/src/api/spaceKeys';
+import { randomSpaceKey } from '../../../web/src/__tests__/helpers/spaceKey';
+import type { SpaceKey } from '@ubimate/crypto';
 
 const TEST_USER_ID = 'test-user-relay-integration';
 const DOC_NAME = 'integration-doc';
 
 /** Wait for a condition, polling — the round trip spans two event loops. */
-async function until(predicate: () => boolean, timeoutMs = 4_000): Promise<void> {
+async function until(predicate: () => boolean | Promise<boolean>, timeoutMs = 4_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
-  while (!predicate()) {
+  while (!(await predicate())) {
     if (Date.now() > deadline) throw new Error('timed out waiting for condition');
     await new Promise((r) => setTimeout(r, 20));
   }
@@ -45,6 +48,7 @@ describe('relay ↔ CloudRelayProvider (real socket)', () => {
   let wss: WebSocketServer | null = null;
   let wsUrl = '';
   let token = '';
+  let key: SpaceKey;
   let getStoredUpdates: () => Uint8Array[];
   const providers: CloudRelayProvider[] = [];
 
@@ -55,6 +59,7 @@ describe('relay ↔ CloudRelayProvider (real socket)', () => {
     process.env.JWT_SECRET = 'relay-integration-secret';
 
     vi.resetModules();
+    key = await randomSpaceKey();
 
     const { registryStmts } = await import('../db/registry');
     registryStmts.createUser.run({
@@ -112,19 +117,19 @@ describe('relay ↔ CloudRelayProvider (real socket)', () => {
       name: DOC_NAME,
       document: doc,
       token: () => token,
-      getKey: () => null,
-      encrypted: false,
+      getKey: () => key,
     });
     providers.push(provider);
     return provider;
   }
 
-  /** Merge everything the server has stored for this doc. */
-  function storedDoc(): Y.Doc {
+  /** Merge everything the server has stored for this doc, opened with the Space key. */
+  async function storedDoc(): Promise<Y.Doc> {
     const merged = new Y.Doc();
-    for (const update of getStoredUpdates()) Y.applyUpdate(merged, update);
+    for (const blob of getStoredUpdates()) Y.applyUpdate(merged, await openBytes(blob, key));
     return merged;
   }
+  const storedText = async () => (await storedDoc()).getText('body').toString();
 
   it('persists live edits through the real wire protocol', async () => {
     const doc = new Y.Doc();
@@ -132,7 +137,12 @@ describe('relay ↔ CloudRelayProvider (real socket)', () => {
     await until(() => provider.isSynced);
 
     doc.getText('body').insert(0, 'hello over the wire');
-    await until(() => storedDoc().getText('body').toString() === 'hello over the wire');
+    await until(async () => await storedText() === 'hello over the wire');
+
+    // The relay is blind: no stored blob carries the text.
+    const stored = getStoredUpdates();
+    expect(stored.length).toBeGreaterThan(0);
+    for (const blob of stored) expect(Buffer.from(blob).includes('hello over the wire')).toBe(false);
   });
 
   it('pushes edits made before the socket ever connected', async () => {
@@ -143,7 +153,7 @@ describe('relay ↔ CloudRelayProvider (real socket)', () => {
 
     const provider = connect(doc);
     await until(() => provider.isSynced);
-    await until(() => storedDoc().getText('body').toString() === 'written offline');
+    await until(async () => await storedText() === 'written offline');
   });
 
   it('recovers an edit the server never stored, after a reconnect', async () => {
@@ -152,7 +162,7 @@ describe('relay ↔ CloudRelayProvider (real socket)', () => {
     await until(() => provider.isSynced);
 
     doc.getText('body').insert(0, 'first');
-    await until(() => storedDoc().getText('body').toString() === 'first');
+    await until(async () => await storedText() === 'first');
 
     // Sever the connection at the socket level and make an edit that has
     // nowhere to go — the frame is written to a socket the server already
@@ -160,12 +170,12 @@ describe('relay ↔ CloudRelayProvider (real socket)', () => {
     for (const client of wss!.clients) client.terminate();
     doc.getText('body').insert(5, ' and lost');
     await new Promise((r) => setTimeout(r, 150));
-    expect(storedDoc().getText('body').toString()).toBe('first');
+    expect(await storedText()).toBe('first');
 
     // The provider reconnects on its own backoff timer and resyncs the gap.
     await until(() => provider.isSynced, 8_000);
     await until(
-      () => storedDoc().getText('body').toString() === 'first and lost',
+      async () => await storedText() === 'first and lost',
       8_000,
     );
   }, 20_000);
@@ -182,6 +192,6 @@ describe('relay ↔ CloudRelayProvider (real socket)', () => {
 
     docB.getText('body').insert(6, ' + from B');
     await until(() => docA.getText('body').toString() === 'from A + from B');
-    await until(() => storedDoc().getText('body').toString() === 'from A + from B');
+    await until(async () => await storedText() === 'from A + from B');
   });
 });

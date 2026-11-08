@@ -55,12 +55,6 @@ function sendQuotaExceeded(res: Response, userId: string, limit: number, revealF
   });
 }
 
-function demoRefused(req: Request, res: Response): boolean {
-  if (!req.isDemo) return false;
-  res.status(403).json({ error: 'File uploads are not available in demo mode' });
-  return true;
-}
-
 /** The caller's own attachment in the given state, or a 404 sent. */
 function ownPending(req: Request, res: Response): AttachmentRow | null {
   const row = ID.test(req.params.id)
@@ -78,7 +72,6 @@ function ownPending(req: Request, res: Response): AttachmentRow | null {
  * row and says where to PUT them.
  */
 attachmentsRouter.post('/presign', asyncRoute(async (req: Request, res: Response) => {
-  if (demoRefused(req, res)) return;
   const { workspaceId, attachmentId, size, kind, keyVersion, wrappedKey } = (req.body ?? {}) as Record<string, unknown>;
   if (typeof workspaceId !== 'string' || !ID.test(workspaceId)) return void res.status(400).json({ error: 'Invalid workspaceId' });
   if (typeof attachmentId !== 'string' || !ID.test(attachmentId)) return void res.status(400).json({ error: 'Invalid attachmentId' });
@@ -159,7 +152,6 @@ const writing = new Set<string>();
  * Written beside the final name and moved onto it when complete, so a reader never sees a part.
  */
 attachmentsRouter.put('/:id/content', (req: Request, res: Response) => {
-  if (demoRefused(req, res)) return;
   const row = ownPending(req, res);
   if (!row) return;
   const target = localPath(row);
@@ -205,7 +197,6 @@ attachmentsRouter.put('/:id/content', (req: Request, res: Response) => {
  * removes the object and the row and charges nothing; otherwise the owner is charged.
  */
 attachmentsRouter.post('/:id/confirm', asyncRoute(async (req: Request, res: Response) => {
-  if (demoRefused(req, res)) return;
   // A confirm whose answer was lost is asked again: it is done, and says so without charging twice.
   const earlier = ID.test(req.params.id) ? registryStmts.getAttachment.get(req.params.id) as AttachmentRow | undefined : undefined;
   if (earlier?.status === 'confirmed' && earlier.uploader_user_id === req.userId) {
@@ -311,7 +302,6 @@ attachmentsRouter.get('/:id/content', asyncRoute(async (req: Request, res: Respo
  * its bytes go back at once to the account that was charged for it.
  */
 attachmentsRouter.delete('/:id', (req: Request, res: Response) => {
-  if (demoRefused(req, res)) return;
   const row = ID.test(req.params.id) ? registryStmts.getAttachment.get(req.params.id) as AttachmentRow | undefined : undefined;
   const owner = row ? (registryStmts.getSpaceOwner.get(row.workspace_id) as { owner_user_id: string } | undefined)?.owner_user_id : undefined;
   // Someone who may not delete it is told it is not there, as a non-member is told about a read.

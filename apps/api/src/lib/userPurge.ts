@@ -2,8 +2,7 @@
 // See LICENSE in the project root for details.
 
 /**
- * Deleting an account and everything the server holds for it (docs/ADMIN.md §2.7): the admin's Delete and
- * the demo purge both come here.
+ * Deleting an account and everything the server holds for it (docs/ADMIN.md §2.7), for the admin's Delete.
  *
  * Order matters. Bucket objects go first: their only record is the `attachments` ledger, whose rows cascade
  * away with the user, so an object left behind then could never be found again. If one cannot be removed

@@ -110,6 +110,9 @@ importers:
       nodemailer:
         specifier: 6.10.1
         version: 6.10.1
+      undici:
+        specifier: 7.24.4
+        version: 7.24.4
       ws:
         specifier: 8.20.0
         version: 8.20.0
@@ -10159,7 +10162,6 @@ packages:
   /undici@7.24.4:
     resolution: {integrity: sha512-BM/JzwwaRXxrLdElV2Uo6cTLEjhSb3WXboncJamZ15NgUURmvlXvxa6xkwIOILIjPNo9i8ku136ZvWV0Uly8+w==}
     engines: {node: '>=20.18.1'}
-    dev: true
 
   /unidragger@2.4.0:
     resolution: {integrity: sha512-MueZK2oXuGE6OAlGKIrSXK2zCq+8yb1QUZgqyTDCSJzvwYL0g2Llrad+TtoQTYxtFnNyxxSw0IMnKNIgEMia1w==}

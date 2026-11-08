@@ -73,7 +73,6 @@ describe.each([['disk', false], ['bucket', true]] as const)('accounting invarian
     vi.doMock('../middleware/auth', () => ({
       requireAuth: (req: Request, _res: Response, next: NextFunction) => {
         (req as Request & { userId: string }).userId = current;
-        (req as Request & { isDemo: boolean }).isDemo = false;
         next();
       },
     }));

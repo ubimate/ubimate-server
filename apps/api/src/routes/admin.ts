@@ -108,9 +108,6 @@ adminRouter.get('/users', (_req: Request, res: Response) => {
     properties: string;
     status: string;
     created_at: number;
-    is_demo: number;
-    demo_expires_at: number | null;
-    freetrial_token: string | null;
     user_type: string;
   }[];
 
@@ -157,9 +154,6 @@ adminRouter.get('/users', (_req: Request, res: Response) => {
       status: row.status,
       created_at: row.created_at,
       disk_usage_bytes: diskUsageBytes,
-      is_demo: row.is_demo === 1,
-      demo_expires_at: row.demo_expires_at,
-      has_freetrial: row.freetrial_token !== null,
       user_type: row.user_type,
       // Storage quota (docs/DISK-QUOTAS.md): the limit, null when unlimited, and the usage as last
       // reconciled, null for an account that has not been reconciled yet.

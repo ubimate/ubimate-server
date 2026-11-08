@@ -8,7 +8,6 @@ import {
   InputNumber,
   Modal,
   Progress,
-  Radio,
   Select,
   Space,
   Switch,
@@ -34,9 +33,6 @@ interface AdminUser {
   status: string;
   created_at: number;
   disk_usage_bytes: number;
-  is_demo: boolean;
-  demo_expires_at: number | null;
-  has_freetrial: boolean;
   user_type: string;
   /** Attachment limit in bytes; null when unlimited (docs/DISK-QUOTAS.md). */
   quota_bytes: number | null;
@@ -44,8 +40,6 @@ interface AdminUser {
   attachments_used_bytes: number | null;
   sync_used_bytes: number | null;
 }
-
-type UserTypeFilter = 'all' | 'real' | 'demo' | 'freetrial';
 
 interface AdminInvitation {
   id: string;
@@ -283,7 +277,6 @@ const AdminDashboard: React.FC<{ api: ReturnType<typeof useAdminApi>; onLogout: 
   const [invitations, setInvitations] = useState<AdminInvitation[]>([]);
   const [loadingUsers, setLoadingUsers] = useState(true);
   const [loadingInvitations, setLoadingInvitations] = useState(true);
-  const [userTypeFilter, setUserTypeFilter] = useState<UserTypeFilter>('all');
   const [inviteModalOpen, setInviteModalOpen] = useState(false);
   const [inviteLoading, setInviteLoading] = useState(false);
   const [inviteForm] = Form.useForm();
@@ -408,13 +401,7 @@ const AdminDashboard: React.FC<{ api: ReturnType<typeof useAdminApi>; onLogout: 
     }
   }
 
-  const filteredUsers = users.filter((u) => {
-    if (overEightyOnly && !((quotaFraction(u) ?? 0) >= 0.8)) return false;
-    if (userTypeFilter === 'real')      return !u.is_demo;
-    if (userTypeFilter === 'demo')      return u.user_type === 'demo';
-    if (userTypeFilter === 'freetrial') return u.user_type === 'trial';
-    return true;
-  });
+  const filteredUsers = users.filter((u) => !overEightyOnly || (quotaFraction(u) ?? 0) >= 0.8);
 
   const userColumns = [
     {
@@ -434,8 +421,6 @@ const AdminDashboard: React.FC<{ api: ReturnType<typeof useAdminApi>; onLogout: 
       render: (_: unknown, record: AdminUser) => {
         const TYPE_COLORS: Record<string, string> = {
           regular: 'green',
-          demo: 'orange',
-          trial: 'purple',
         };
         const color = TYPE_COLORS[record.user_type] ?? 'blue';
         return <Tag color={color}>{record.user_type}</Tag>;
@@ -446,14 +431,6 @@ const AdminDashboard: React.FC<{ api: ReturnType<typeof useAdminApi>; onLogout: 
       dataIndex: 'status',
       key: 'status',
       render: (status: string) => <Tag color={STATUS_COLORS[status] ?? 'default'}>{status}</Tag>,
-    },
-    {
-      title: 'Expires',
-      key: 'demo_expires_at',
-      render: (_: unknown, record: AdminUser) =>
-        record.demo_expires_at ? formatDate(record.demo_expires_at) : '—',
-      sorter: (a: AdminUser, b: AdminUser) =>
-        (a.demo_expires_at ?? 0) - (b.demo_expires_at ?? 0),
     },
     {
       title: 'Disk usage',
@@ -586,21 +563,9 @@ const AdminDashboard: React.FC<{ api: ReturnType<typeof useAdminApi>; onLogout: 
         title="Users"
         className="admin-section"
         extra={
-          <Space>
           <Checkbox checked={overEightyOnly} onChange={(e) => setOverEightyOnly(e.target.checked)}>
             Over 80% of the limit
           </Checkbox>
-          <Radio.Group
-            value={userTypeFilter}
-            onChange={(e) => setUserTypeFilter(e.target.value as UserTypeFilter)}
-            size="small"
-          >
-            <Radio.Button value="all">All ({users.length})</Radio.Button>
-            <Radio.Button value="real">Real ({users.filter(u => !u.is_demo).length})</Radio.Button>
-            <Radio.Button value="demo">Demo ({users.filter(u => u.is_demo).length})</Radio.Button>
-            <Radio.Button value="freetrial">Free trial ({users.filter(u => u.is_demo && u.has_freetrial).length})</Radio.Button>
-          </Radio.Group>
-          </Space>
         }
       >
         <Table

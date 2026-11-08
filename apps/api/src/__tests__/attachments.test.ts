@@ -35,7 +35,6 @@ describe('attachments router (local mode)', () => {
   let quota: typeof import('../lib/quota');
   let lib: typeof import('../lib/attachments');
   let currentUser = ALICE;
-  let isDemo = false;
   let spaceKey: Uint8Array;
 
   function addUser(id: string, limit: number | null = null): void {
@@ -58,14 +57,12 @@ describe('attachments router (local mode)', () => {
     process.env.MAX_AUDIO_UPLOAD_MB = '2';
     process.env.MAX_VIDEO_UPLOAD_MB = '3';
     currentUser = ALICE;
-    isDemo = false;
     spaceKey = await generateContentKey();
 
     vi.resetModules();
     vi.doMock('../middleware/auth', () => ({
       requireAuth: (req: Request, _res: Response, next: NextFunction) => {
         (req as Request & { userId: string }).userId = currentUser;
-        (req as Request & { isDemo: boolean }).isDemo = isDemo;
         next();
       },
     }));
@@ -307,14 +304,6 @@ describe('attachments router (local mode)', () => {
       currentUser = BOB;
       expect((await presign(bodyOf(pending, m.wrappedKey, m.blob.length))).status).toBe(409);
       expect(rowOf(pending)?.uploader_user_id).toBe(ALICE);
-    });
-
-    it('is refused in demo mode', async () => {
-      isDemo = true;
-      const id = newId();
-      const { blob, wrappedKey } = await makeBlob(id, bytes(10));
-      expect((await presign(bodyOf(id, wrappedKey, blob.length))).status).toBe(403);
-      expect(rowOf(id)).toBeUndefined();
     });
   });
 

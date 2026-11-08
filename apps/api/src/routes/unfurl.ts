@@ -1,58 +1,18 @@
 import { Router, Request, Response } from 'express';
-import dns from 'dns';
-import net from 'net';
+import { fetch } from 'undici';
+import type { Response as FetchResponse } from 'undici';
 import { requireAuth } from '../middleware/auth';
+import { isBlockedAddressError, isBlockedHost, publicDispatcher } from '../lib/publicAddress';
 
 export const unfurlRouter = Router();
 unfurlRouter.use(requireAuth);
 
 // ── SSRF protection ──────────────────────────────────────────────────────────
-
-function isPrivateIp(ip: string): boolean {
-  if (net.isIPv4(ip)) {
-    const [a, b] = ip.split('.').map(Number);
-    return (
-      a === 10 ||
-      a === 127 ||
-      (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 168) ||
-      (a === 169 && b === 254) // link-local
-    );
-  }
-  if (net.isIPv6(ip)) {
-    const norm = ip.toLowerCase().replace(/^\[|\]$/g, '');
-    return (
-      norm === '::1' ||
-      norm.startsWith('fc') ||
-      norm.startsWith('fd') ||
-      norm.startsWith('fe80')
-    );
-  }
-  return false;
-}
-
-async function isSsrfRisk(hostname: string): Promise<boolean> {
-  const h = hostname.toLowerCase().replace(/^\[|\]$/g, '');
-  if (h === 'localhost' || h.endsWith('.local') || h.endsWith('.internal')) return true;
-
-  // If the hostname is already an IP literal, check it directly.
-  if (net.isIPv4(h) || net.isIPv6(h)) return isPrivateIp(h);
-
-  // Resolve DNS and check every returned address.
-  // NOTE: redirect targets are not re-checked; this protects against direct
-  // private-IP references but not against DNS-rebinding or redirect chains.
-  try {
-    const v4 = await dns.promises.resolve4(h);
-    if (v4.some(isPrivateIp)) return true;
-  } catch { /* no IPv4 record */ }
-
-  try {
-    const v6 = await dns.promises.resolve6(h);
-    if (v6.some(isPrivateIp)) return true;
-  } catch { /* no IPv6 record */ }
-
-  return false;
-}
+//
+// See lib/publicAddress.ts. In short: the host as written is checked before
+// each hop (IP literals, local-only names), and every connection goes through
+// `publicDispatcher`, which refuses a name that resolves to a non-public
+// address at the moment of connecting.
 
 // ── HTML parsing ─────────────────────────────────────────────────────────────
 
@@ -154,7 +114,7 @@ interface OembedResponse {
 async function fetchOembed(url: string, endpoint: string, signal: AbortSignal): Promise<OgData | null> {
   try {
     const oembedUrl = `${endpoint}?url=${encodeURIComponent(url)}&format=json`;
-    const r = await fetch(oembedUrl, { signal });
+    const r = await fetch(oembedUrl, { signal, dispatcher: publicDispatcher });
     if (!r.ok) return null;
     const data = (await r.json()) as OembedResponse;
     if (!data.title) return null;
@@ -200,7 +160,7 @@ unfurlRouter.get('/', async (req: Request, res: Response) => {
     return;
   }
 
-  if (await isSsrfRisk(parsed.hostname)) {
+  if (isBlockedHost(parsed.hostname)) {
     res.status(400).json({ error: 'URL not allowed' });
     return;
   }
@@ -233,20 +193,25 @@ unfurlRouter.get('/', async (req: Request, res: Response) => {
     };
 
     // Follow redirects manually so every hop is re-checked for SSRF risk.
-    // Using redirect: 'follow' would bypass the isSsrfRisk check for the
+    // Using redirect: 'follow' would bypass the isBlockedHost check for the
     // redirect targets (a URL could resolve publicly but redirect to 192.168.x.x).
     const MAX_HOPS = 5;
     let currentUrl = parsed.href;
-    let response: globalThis.Response | null = null;
+    let response: FetchResponse | null = null;
     for (let hop = 0; hop <= MAX_HOPS; hop++) {
-      const r = await fetch(currentUrl, { signal: controller.signal, headers: FETCH_HEADERS, redirect: 'manual' });
+      const r = await fetch(currentUrl, {
+        signal: controller.signal,
+        headers: FETCH_HEADERS,
+        redirect: 'manual',
+        dispatcher: publicDispatcher,
+      });
       if (r.status >= 300 && r.status < 400) {
         const location = r.headers.get('location');
         if (!location) break;
         let next: URL;
         try { next = new URL(location, currentUrl); } catch { break; }
         if (next.protocol !== 'http:' && next.protocol !== 'https:') break;
-        if (await isSsrfRisk(next.hostname)) {
+        if (isBlockedHost(next.hostname)) {
           clearTimeout(timeout);
           res.status(400).json({ error: 'URL not allowed' });
           return;
@@ -302,7 +267,9 @@ unfurlRouter.get('/', async (req: Request, res: Response) => {
     const og = parseOgData(html, currentUrl);
     res.json({ ...og, url: raw });
   } catch (err: unknown) {
-    if ((err as { name?: string }).name === 'AbortError') {
+    if (isBlockedAddressError(err)) {
+      res.status(400).json({ error: 'URL not allowed' });
+    } else if ((err as { name?: string }).name === 'AbortError') {
       res.status(504).json({ error: 'Request timed out' });
     } else {
       res.status(502).json({ error: 'Failed to fetch URL' });

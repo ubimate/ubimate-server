@@ -230,18 +230,15 @@ describe('storage quotas', () => {
   });
 
   describe('reconcileAllUsage', () => {
-    it('reconciles real accounts and leaves demo accounts out', async () => {
-      const real = addUser();
-      addAttachment(real, 'a', 12);
-      const demoId = randomUUID();
-      registry.registryStmts.createDemoUser.run({
-        id: demoId, email: `${demoId}@demo.local`, properties: '{}', created_at: Date.now(), demo_expires_at: Date.now() + 1000,
-      });
-      addAttachment(demoId, 'd', 99);
+    it('reconciles every account', async () => {
+      const first = addUser();
+      addAttachment(first, 'a', 12);
+      const second = addUser();
+      addAttachment(second, 'b', 99);
 
-      expect(await quota.reconcileAllUsage()).toBe(1);
-      expect(quota.listUsageByUser().get(real)?.attachments).toBe(12);
-      expect(quota.listUsageByUser().has(demoId)).toBe(false);
+      expect(await quota.reconcileAllUsage()).toBe(2);
+      expect(quota.listUsageByUser().get(first)?.attachments).toBe(12);
+      expect(quota.listUsageByUser().get(second)?.attachments).toBe(99);
     });
   });
 

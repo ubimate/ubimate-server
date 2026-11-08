@@ -79,7 +79,6 @@ describe('attachments router (S3 mode)', () => {
     vi.doMock('../middleware/auth', () => ({
       requireAuth: (req: Request, _res: Response, next: NextFunction) => {
         (req as Request & { userId: string }).userId = currentUser;
-        (req as Request & { isDemo: boolean }).isDemo = false;
         next();
       },
     }));

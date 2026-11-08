@@ -143,17 +143,11 @@ export interface UserRow {
   public_key: string | null;
   /** Base64-encoded sealed content key — null for pre-ZK accounts. */
   wrapped_content_key: string | null;
-  /** 1 when this is a throwaway demo account, 0 otherwise. */
-  is_demo: number;
-  /** Unix ms expiry for demo accounts; null for real accounts. */
-  demo_expires_at: number | null;
-  /** Random 64-char hex token used to re-enter a free-trial demo session. Null until activated. */
-  freetrial_token: string | null;
-  /** Canonical account type — e.g. 'regular', 'demo', 'trial', 'perso26', 'perso26_launch'. */
+  /** Canonical account type — e.g. 'regular', 'perso26', 'perso26_launch'. */
   user_type: string;
   /**
    * Mutable contact address for billing and notifications; has no cryptographic role. Set to `email`
-   * at registration. NULL for demo and trial accounts, whose `email` is not a real address.
+   * at registration.
    */
   contact_email: string | null;
   /**
@@ -315,24 +309,11 @@ registryDb.exec(`
   CREATE INDEX IF NOT EXISTS idx_reset_tokens_user_id ON credential_reset_tokens(user_id);
 `);
 
-// Migrations — add demo columns if they do not already exist.
+// Migration — add user_type column if it does not already exist.
 {
   const userCols = (registryDb.pragma('table_info(users)') as { name: string }[]).map((c) => c.name);
-  if (!userCols.includes('is_demo')) {
-    registryDb.exec(`ALTER TABLE users ADD COLUMN is_demo INTEGER NOT NULL DEFAULT 0`);
-  }
-  if (!userCols.includes('demo_expires_at')) {
-    registryDb.exec(`ALTER TABLE users ADD COLUMN demo_expires_at INTEGER`);
-  }
-  if (!userCols.includes('freetrial_token')) {
-    registryDb.exec(`ALTER TABLE users ADD COLUMN freetrial_token TEXT`);
-    registryDb.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_freetrial_token ON users(freetrial_token) WHERE freetrial_token IS NOT NULL`);
-  }
   if (!userCols.includes('user_type')) {
     registryDb.exec(`ALTER TABLE users ADD COLUMN user_type TEXT NOT NULL DEFAULT 'regular'`);
-    // Backfill from the legacy is_demo + freetrial_token flags.
-    registryDb.exec(`UPDATE users SET user_type = 'trial' WHERE is_demo = 1 AND freetrial_token IS NOT NULL`);
-    registryDb.exec(`UPDATE users SET user_type = 'demo'  WHERE is_demo = 1 AND freetrial_token IS NULL`);
     registryDb.exec(`CREATE INDEX IF NOT EXISTS idx_users_user_type ON users(user_type)`);
   }
 }
@@ -343,9 +324,6 @@ registryDb.exec(`
   if (!userCols.includes('contact_email')) {
     registryDb.exec(`ALTER TABLE users ADD COLUMN contact_email TEXT`);
   }
-  // Registration fills it in since 2026-10-18; accounts made before then start from their login
-  // email too. Not a demo's: its email (demo-<id>@demo.local) is no one's address.
-  registryDb.exec(`UPDATE users SET contact_email = email WHERE contact_email IS NULL AND is_demo = 0`);
 }
 
 // Migration — add primary_workspace_id column if it does not already exist.
@@ -387,20 +365,6 @@ export const registryStmts = {
     INSERT INTO users (id, email, contact_email, properties, created_at, status, public_key, wrapped_content_key, user_type)
     VALUES (@id, @email, @email, @properties, @created_at, @status, @public_key, @wrapped_content_key, @user_type)
   `),
-  createDemoUser: registryDb.prepare(`
-    INSERT INTO users (id, email, properties, created_at, status, is_demo, demo_expires_at, user_type)
-    VALUES (@id, @email, @properties, @created_at, 'active', 1, @demo_expires_at, 'demo')
-  `),
-  countDemoUsers: registryDb.prepare(`SELECT COUNT(*) as count FROM users WHERE is_demo = 1`),
-  listExpiredDemoUsers: registryDb.prepare(`
-    SELECT id FROM users WHERE is_demo = 1 AND demo_expires_at < ?
-  `),
-  setFreeTrialToken: registryDb.prepare(`
-    UPDATE users SET freetrial_token = @token, demo_expires_at = @expires_at, user_type = 'trial' WHERE id = @id
-  `),
-  getUserByFreeTrialToken: registryDb.prepare(`
-    SELECT * FROM users WHERE freetrial_token = ?
-  `),
   deleteAllWorkspaceKeysForUser: registryDb.prepare(`
     DELETE FROM workspace_keys WHERE user_id = ?
   `),
@@ -424,7 +388,7 @@ export const registryStmts = {
   `),
   deleteUser: registryDb.prepare(`DELETE FROM users WHERE id = ?`),
   updateUserProperties: registryDb.prepare(`UPDATE users SET properties = @properties WHERE id = @id`),
-  listUsers: registryDb.prepare(`SELECT id, email, properties, status, created_at, is_demo, demo_expires_at, freetrial_token, user_type FROM users`),
+  listUsers: registryDb.prepare(`SELECT id, email, properties, status, created_at, user_type FROM users`),
 
   // Workspace keys
   // A Space's first key, which is at version 1 (the column's default).
