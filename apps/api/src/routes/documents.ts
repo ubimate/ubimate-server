@@ -11,6 +11,7 @@ import type {
 } from '@ubimate/types';
 import { generateKeyBetween } from '@ubimate/utils';
 import { requireAuth } from '../middleware/auth';
+import { requireEntitlement } from '../middleware/entitlement';
 import { registryStmts, resolvePrimaryWorkspaceId } from '../db/registry';
 import { relay } from '../relay';
 import { addDocumentEventClient, broadcastContentChanged, broadcastTreeChanged } from '../lib/documentEvents';
@@ -19,6 +20,7 @@ export const documentsRouter = Router();
 
 // All document routes require authentication.
 documentsRouter.use(requireAuth);
+documentsRouter.use(requireEntitlement);
 
 // ---------------------------------------------------------------------------
 // SSE — tree-change notifications (scoped per user)

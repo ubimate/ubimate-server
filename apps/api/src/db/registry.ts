@@ -309,6 +309,7 @@ registryDb.exec(`
   CREATE INDEX IF NOT EXISTS idx_reset_tokens_user_id ON credential_reset_tokens(user_id);
 `);
 
+
 // Migration — add user_type column if it does not already exist.
 {
   const userCols = (registryDb.pragma('table_info(users)') as { name: string }[]).map((c) => c.name);
@@ -542,6 +543,14 @@ export interface CredentialResetTokenRow {
   created_at: number;
   expires_at: number;
   consumed_at: number | null;
+}
+
+/**
+ * The registry database itself, for a module that keeps its own tables in it (billing/db.ts) so that
+ * the tables exist only where that module ships.
+ */
+export function registryDatabase(): Database.Database {
+  return registryDb;
 }
 
 export function withRegistryTransaction<T>(fn: () => T): T {

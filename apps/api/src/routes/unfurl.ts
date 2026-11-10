@@ -2,10 +2,12 @@ import { Router, Request, Response } from 'express';
 import { fetch } from 'undici';
 import type { Response as FetchResponse } from 'undici';
 import { requireAuth } from '../middleware/auth';
+import { requireEntitlement } from '../middleware/entitlement';
 import { isBlockedAddressError, isBlockedHost, publicDispatcher } from '../lib/publicAddress';
 
 export const unfurlRouter = Router();
 unfurlRouter.use(requireAuth);
+unfurlRouter.use(requireEntitlement);
 
 // ── SSRF protection ──────────────────────────────────────────────────────────
 //

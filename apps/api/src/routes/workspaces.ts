@@ -19,6 +19,7 @@
  */
 import { Router, Request, Response } from 'express';
 import { requireAuth } from '../middleware/auth';
+import { requireEntitlement } from '../middleware/entitlement';
 import { registryStmts, withRegistryTransaction } from '../db/registry';
 import type { WorkspaceKeyChainRow, WorkspaceKeyRow, WorkspaceKeyStateRow } from '../db/registry';
 import { WRAPPED_KEY_CHARS } from '../lib/attachments';
@@ -27,6 +28,7 @@ import { broadcastKeyRotated, broadcastRotationPending } from '../lib/documentEv
 export const workspacesRouter = Router();
 
 workspacesRouter.use(requireAuth);
+workspacesRouter.use(requireEntitlement);
 
 /** A sealed Space key is a few hundred base64 characters at most; this only stops absurd bodies. */
 const MAX_SEALED_KEY_CHARS = 1024;

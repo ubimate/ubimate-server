@@ -41,6 +41,24 @@ interface AdminUser {
   sync_used_bytes: number | null;
 }
 
+type GrantPlan = 'personal' | 'pro';
+
+/** Complimentary access (docs/CREEM.md §4.10): a plan, free, until `endsAt` (null: no end). */
+interface Grant {
+  plan: GrantPlan;
+  endsAt: number | null;
+}
+
+/** An account's plan where the server bills: from a subscription, a grant, or none. */
+interface AccountBilling {
+  userId: string;
+  plan: GrantPlan | null;
+  /** The Creem status of its subscription, or null for none. */
+  status: string | null;
+  /** Its grant, ended ones included (`active` false). */
+  grant: (Grant & { active: boolean }) | null;
+}
+
 interface AdminInvitation {
   id: string;
   email: string;
@@ -92,8 +110,54 @@ function useAdminApi(baseUrl: string, token: string | null) {
     return res.json() as Promise<AdminInvitation[]>;
   }, [baseUrl, headers]);
 
+  /** Whether the server bills; a server from before the route (404) does not. */
+  const fetchBillingEnabled = useCallback(async (): Promise<boolean> => {
+    const res = await fetch(`${baseUrl}/api/admin/billing`, { headers: headers() });
+    if (res.status === 404) return false;
+    if (!res.ok) throw new Error('Failed to ask whether the server bills');
+    return ((await res.json()) as { enabled?: boolean }).enabled === true;
+  }, [baseUrl, headers]);
+
+  const fetchAccountsBilling = useCallback(async (): Promise<AccountBilling[]> => {
+    const res = await fetch(`${baseUrl}/api/admin/billing/accounts`, { headers: headers() });
+    if (!res.ok) throw new Error('Failed to fetch plans');
+    return res.json() as Promise<AccountBilling[]>;
+  }, [baseUrl, headers]);
+
+  const fetchInvitationGrants = useCallback(async (): Promise<(Grant & { invitationId: string })[]> => {
+    const res = await fetch(`${baseUrl}/api/admin/billing/invitation-grants`, { headers: headers() });
+    if (!res.ok) throw new Error('Failed to fetch invitation grants');
+    return res.json() as Promise<(Grant & { invitationId: string })[]>;
+  }, [baseUrl, headers]);
+
+  const setGrant = useCallback(
+    async (userId: string, grant: Grant): Promise<void> => {
+      const res = await fetch(`${baseUrl}/api/admin/billing/grants/${userId}`, {
+        method: 'PUT',
+        headers: headers(),
+        body: JSON.stringify(grant),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error((body as { error?: string }).error ?? `Failed to grant (${res.status})`);
+      }
+    },
+    [baseUrl, headers],
+  );
+
+  const endGrant = useCallback(
+    async (userId: string): Promise<void> => {
+      const res = await fetch(`${baseUrl}/api/admin/billing/grants/${userId}`, { method: 'DELETE', headers: headers() });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error((body as { error?: string }).error ?? `Failed to end the grant (${res.status})`);
+      }
+    },
+    [baseUrl, headers],
+  );
+
   const createInvitation = useCallback(
-    async (email: string): Promise<AdminInvitation> => {
+    async (email: string, grant: Grant | null = null): Promise<AdminInvitation> => {
       const tokenBytes = crypto.getRandomValues(new Uint8Array(32));
       const inviteToken = Array.from(tokenBytes)
         .map((b) => b.toString(16).padStart(2, '0'))
@@ -102,7 +166,7 @@ function useAdminApi(baseUrl: string, token: string | null) {
 
       // Signing keypair is not available in the standalone admin app; the API
       // accepts invitations without a signature.
-      const body: Record<string, unknown> = { email, token: inviteToken, expires_at: expiresAt };
+      const body: Record<string, unknown> = { email, token: inviteToken, expires_at: expiresAt, ...(grant ? { grant } : {}) };
 
       const res = await fetch(`${baseUrl}/api/admin/invitations`, {
         method: 'POST',
@@ -161,7 +225,10 @@ function useAdminApi(baseUrl: string, token: string | null) {
     [baseUrl, headers],
   );
 
-  return { login, fetchUsers, fetchInvitations, createInvitation, deleteInvitation, deleteUser, setDiskQuota };
+  return {
+    login, fetchUsers, fetchInvitations, createInvitation, deleteInvitation, deleteUser, setDiskQuota,
+    fetchBillingEnabled, fetchAccountsBilling, fetchInvitationGrants, setGrant, endGrant,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -193,6 +260,30 @@ function formatDate(ms: number): string {
     hour: '2-digit',
     minute: '2-digit',
   });
+}
+
+const PLAN_NAMES: Record<GrantPlan, string> = { personal: 'Personal', pro: 'Pro' };
+
+function formatDay(ms: number): string {
+  return new Date(ms).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+/** A grant's end from a date field (`YYYY-MM-DD`): the end of that day, local time; null for none. */
+function endOfDay(value: string): number | null {
+  if (!value) return null;
+  const [y, m, d] = value.split('-').map(Number);
+  return new Date(y, m - 1, d, 23, 59, 59, 999).getTime();
+}
+
+/** `ms` as a date field's value. */
+function dayValue(ms: number): string {
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/** What a grant reads as in a table: "Pro, until Jan 31, 2027", "Personal, no end". */
+function describeGrant(grant: Grant): string {
+  return `${PLAN_NAMES[grant.plan]}, ${grant.endsAt === null ? 'no end' : `until ${formatDay(grant.endsAt)}`}`;
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -286,6 +377,14 @@ const AdminDashboard: React.FC<{ api: ReturnType<typeof useAdminApi>; onLogout: 
   const [quotaAmount, setQuotaAmount] = useState<number | null>(10);
   const [quotaUnit, setQuotaUnit] = useState<QuotaUnit>('GB');
   const [quotaSaving, setQuotaSaving] = useState(false);
+  /** Whether the server bills: grants and plans are shown only where it does (docs/CREEM.md §4.10). */
+  const [billingEnabled, setBillingEnabled] = useState(false);
+  const [accountsBilling, setAccountsBilling] = useState<Map<string, AccountBilling>>(new Map());
+  const [invitationGrants, setInvitationGrants] = useState<Map<string, Grant>>(new Map());
+  const [grantUser, setGrantUser] = useState<AdminUser | null>(null);
+  const [grantPlan, setGrantPlan] = useState<GrantPlan>('personal');
+  const [grantEnd, setGrantEnd] = useState('');
+  const [grantSaving, setGrantSaving] = useState(false);
   const [messageApi, contextHolder] = message.useMessage();
   // The hook, not the static Modal.confirm: antd 5's static methods render nothing under React 19.
   const [modalApi, modalContextHolder] = Modal.useModal();
@@ -312,15 +411,32 @@ const AdminDashboard: React.FC<{ api: ReturnType<typeof useAdminApi>; onLogout: 
     }
   }, [api, messageApi]);
 
+  const loadBilling = useCallback(async () => {
+    try {
+      const enabled = await api.fetchBillingEnabled();
+      setBillingEnabled(enabled);
+      if (!enabled) return;
+      const [accounts, waiting] = await Promise.all([api.fetchAccountsBilling(), api.fetchInvitationGrants()]);
+      setAccountsBilling(new Map(accounts.map((a) => [a.userId, a])));
+      setInvitationGrants(new Map(waiting.map(({ invitationId, ...grant }) => [invitationId, grant])));
+    } catch {
+      messageApi.error('Failed to load plans and grants');
+    }
+  }, [api, messageApi]);
+
   useEffect(() => {
     void loadUsers();
     void loadInvitations();
-  }, [loadUsers, loadInvitations]);
+    void loadBilling();
+  }, [loadUsers, loadInvitations, loadBilling]);
 
-  async function handleCreateInvitation(values: { email: string }) {
+  async function handleCreateInvitation(values: { email: string; grantPlan?: GrantPlan | 'none'; grantEnd?: string }) {
     setInviteLoading(true);
     try {
-      const inv = await api.createInvitation(values.email);
+      const grant = billingEnabled && values.grantPlan && values.grantPlan !== 'none'
+        ? { plan: values.grantPlan, endsAt: endOfDay(values.grantEnd ?? '') }
+        : null;
+      const inv = await api.createInvitation(values.email, grant);
       if (inv.warning) {
         messageApi.warning(inv.warning);
       } else {
@@ -329,6 +445,7 @@ const AdminDashboard: React.FC<{ api: ReturnType<typeof useAdminApi>; onLogout: 
       setInviteModalOpen(false);
       inviteForm.resetFields();
       void loadInvitations();
+      void loadBilling();
     } catch (err) {
       messageApi.error(err instanceof Error ? err.message : 'Failed to create invitation');
     } finally {
@@ -401,6 +518,51 @@ const AdminDashboard: React.FC<{ api: ReturnType<typeof useAdminApi>; onLogout: 
     }
   }
 
+  function openGrantModal(user: AdminUser) {
+    const grant = accountsBilling.get(user.id)?.grant;
+    setGrantUser(user);
+    setGrantPlan(grant?.plan ?? 'personal');
+    setGrantEnd(grant?.endsAt != null && grant.active ? dayValue(grant.endsAt) : '');
+  }
+
+  async function handleSaveGrant() {
+    if (!grantUser) return;
+    setGrantSaving(true);
+    try {
+      await api.setGrant(grantUser.id, { plan: grantPlan, endsAt: endOfDay(grantEnd) });
+      messageApi.success(`${grantUser.email} has ${describeGrant({ plan: grantPlan, endsAt: endOfDay(grantEnd) })}`);
+      setGrantUser(null);
+      void loadBilling();
+      void loadUsers();
+    } catch (err) {
+      messageApi.error(err instanceof Error ? err.message : 'Failed to grant');
+    } finally {
+      setGrantSaving(false);
+    }
+  }
+
+  function confirmEndGrant(user: AdminUser) {
+    void modalApi.confirm({
+      title: 'End complimentary access',
+      content: `End ${user.email}'s complimentary access now? Unless they subscribe, they can no longer sync.`,
+      okText: 'End it',
+      okType: 'danger',
+      onOk: async () => {
+        try {
+          await api.endGrant(user.id);
+          messageApi.success(`${user.email}'s complimentary access ended`);
+          setGrantUser(null);
+          void loadBilling();
+        } catch (err) {
+          messageApi.error(err instanceof Error ? err.message : 'Failed to end the grant');
+        }
+      },
+    });
+  }
+
+  /** A grant's end, if set, must be today or later. */
+  const grantEndValid = grantEnd === '' || (endOfDay(grantEnd) ?? 0) > Date.now();
+
   const filteredUsers = users.filter((u) => !overEightyOnly || (quotaFraction(u) ?? 0) >= 0.8);
 
   const userColumns = [
@@ -469,6 +631,25 @@ const AdminDashboard: React.FC<{ api: ReturnType<typeof useAdminApi>; onLogout: 
       // Unlimited and unmeasured accounts sort below every limited one.
       sorter: (a: AdminUser, b: AdminUser) => (quotaFraction(a) ?? -1) - (quotaFraction(b) ?? -1),
     },
+    ...(billingEnabled ? [{
+      title: 'Plan',
+      key: 'plan',
+      render: (_: unknown, record: AdminUser) => {
+        const b = accountsBilling.get(record.id);
+        const grant = b?.grant;
+        return (
+          <Space size={4} wrap>
+            {b?.plan ? <Text>{PLAN_NAMES[b.plan]}</Text> : <Text type="secondary">none</Text>}
+            {b?.status && <Tag>{b.status}</Tag>}
+            {grant && (
+              <Tooltip title={`Complimentary ${describeGrant(grant)}`}>
+                <Tag color={grant.active ? 'gold' : 'default'}>{grant.active ? 'complimentary' : 'complimentary, ended'}</Tag>
+              </Tooltip>
+            )}
+          </Space>
+        );
+      },
+    }] : []),
     {
       title: 'Registered',
       dataIndex: 'created_at',
@@ -484,6 +665,11 @@ const AdminDashboard: React.FC<{ api: ReturnType<typeof useAdminApi>; onLogout: 
           <Button type="link" size="small" onClick={() => openQuotaModal(record)}>
             Set limit
           </Button>
+          {billingEnabled && (
+            <Button type="link" size="small" onClick={() => openGrantModal(record)}>
+              Grant…
+            </Button>
+          )}
           <Button type="link" danger size="small" onClick={() => confirmDeleteUser(record)}>
             Delete
           </Button>
@@ -520,6 +706,15 @@ const AdminDashboard: React.FC<{ api: ReturnType<typeof useAdminApi>; onLogout: 
       key: 'status',
       render: (status: string) => <Tag color={STATUS_COLORS[status] ?? 'default'}>{status}</Tag>,
     },
+    ...(billingEnabled ? [{
+      title: 'Complimentary',
+      key: 'grant',
+      // Waiting on the invitation until it is used; then the account's (Users, Plan).
+      render: (_: unknown, record: AdminInvitation) => {
+        const grant = invitationGrants.get(record.id);
+        return grant ? describeGrant(grant) : '—';
+      },
+    }] : []),
     {
       title: 'Sent',
       dataIndex: 'created_at',
@@ -655,6 +850,36 @@ const AdminDashboard: React.FC<{ api: ReturnType<typeof useAdminApi>; onLogout: 
           >
             <Input placeholder="user@example.com" autoCapitalize="off" autoCorrect="off" />
           </Form.Item>
+          {billingEnabled && (
+            <>
+              <Form.Item
+                name="grantPlan"
+                label="Complimentary access"
+                initialValue="none"
+                extra="The plan the account gets for free once it is created. None: it subscribes like anyone else."
+              >
+                <Select
+                  options={[
+                    { value: 'none', label: 'None' },
+                    { value: 'personal', label: 'Personal' },
+                    { value: 'pro', label: 'Pro' },
+                  ]}
+                />
+              </Form.Item>
+              <Form.Item noStyle shouldUpdate={(prev, next) => prev.grantPlan !== next.grantPlan}>
+                {({ getFieldValue }) => getFieldValue('grantPlan') !== 'none' && (
+                  <Form.Item
+                    name="grantEnd"
+                    label="Until (optional)"
+                    extra="Leave empty for no end."
+                    rules={[{ validator: (_, value: string | undefined) => (!value || (endOfDay(value) ?? 0) > Date.now() ? Promise.resolve() : Promise.reject(new Error('Choose today or a later day'))) }]}
+                  >
+                    <Input type="date" aria-label="Until" />
+                  </Form.Item>
+                )}
+              </Form.Item>
+            </>
+          )}
           <Space>
             <Button type="primary" htmlType="submit" loading={inviteLoading}>
               Send
@@ -664,6 +889,42 @@ const AdminDashboard: React.FC<{ api: ReturnType<typeof useAdminApi>; onLogout: 
             </Button>
           </Space>
         </Form>
+      </Modal>
+      <Modal
+        title={grantUser ? `Complimentary access: ${grantUser.email}` : 'Complimentary access'}
+        open={grantUser !== null}
+        onCancel={() => setGrantUser(null)}
+        destroyOnClose
+        footer={
+          <Space>
+            {grantUser && accountsBilling.get(grantUser.id)?.grant && (
+              <Button danger onClick={() => confirmEndGrant(grantUser)}>End grant</Button>
+            )}
+            <Button onClick={() => setGrantUser(null)}>Cancel</Button>
+            <Button type="primary" onClick={() => void handleSaveGrant()} loading={grantSaving} disabled={!grantEndValid}>
+              Save
+            </Button>
+          </Space>
+        }
+      >
+        <Space direction="vertical" style={{ width: '100%' }}>
+          <Text type="secondary">
+            The account gets the plan for free, with its storage limit, beside any subscription it has.
+          </Text>
+          <Select
+            aria-label="Plan"
+            value={grantPlan}
+            onChange={setGrantPlan}
+            options={[{ value: 'personal', label: 'Personal' }, { value: 'pro', label: 'Pro' }]}
+            style={{ width: 160 }}
+          />
+          <Space>
+            <Text>Until</Text>
+            <Input type="date" aria-label="Until" value={grantEnd} onChange={(e) => setGrantEnd(e.target.value)} style={{ width: 180 }} />
+            <Text type="secondary">empty: no end</Text>
+          </Space>
+          {!grantEndValid && <Alert type="error" showIcon message="Choose today or a later day." />}
+        </Space>
       </Modal>
     </div>
   );

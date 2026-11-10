@@ -41,6 +41,7 @@
 import type { WebSocket } from 'ws';
 import type { IncomingMessage } from 'http';
 import jwt from 'jsonwebtoken';
+import { isEntitled } from './middleware/entitlement';
 import { RELAY_FRAME } from '@ubimate/utils';
 import { getUserDb } from './db/userDb';
 import { registryStmts } from './db/registry';
@@ -149,17 +150,18 @@ function parseHello(payload: Uint8Array): { token: string; documentName: string 
 
 export const relay = {
   /**
-   * Close every socket of `userId` (the account was deleted). Code 4003 is what a reconnect would get
-   * anyway, since verifyToken no longer finds the user; closing now stops a socket that is already
-   * subscribed from writing, which would recreate the deleted database through getUserDb.
+   * Close every socket of `userId`: with 4003 when the account was deleted, which is what a reconnect would
+   * get anyway, since verifyToken no longer finds the user; closing now stops a socket that is already
+   * subscribed from writing, which would recreate the deleted database through getUserDb. With 4402 when
+   * the account lost its subscription (docs/CREEM.md §4.8), which is what a reconnect would get too.
    */
-  disconnectUser(userId: string): void {
+  disconnectUser(userId: string, code: 4003 | 4402 = 4003): void {
     for (const set of rooms.values()) {
       for (const member of [...set]) {
         if (member.userId !== userId) continue;
         leaveRoom(member);
         try {
-          member.ws.close(4003, 'auth-failed');
+          member.ws.close(code, code === 4402 ? 'subscription-required' : 'auth-failed');
         } catch {
           // Already closed.
         }
@@ -215,6 +217,10 @@ export const relay = {
         const userId = verifyToken(hello.token);
         if (!userId) {
           ws.close(4003, 'auth-failed');
+          return;
+        }
+        if (!isEntitled(userId)) {
+          ws.close(4402, 'subscription-required');
           return;
         }
         member = { ws, userId, documentName: hello.documentName };

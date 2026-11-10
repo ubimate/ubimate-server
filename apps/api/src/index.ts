@@ -14,6 +14,7 @@ import { unfurlRouter } from './routes/unfurl';
 import { adminRouter } from './routes/admin';
 import { workspacesRouter } from './routes/workspaces';
 import { healthRouter } from './routes/health';
+import billing from './billing';
 import { scheduleUsageReconcile } from './lib/quota';
 import { scheduleAttachmentCleanup } from './lib/attachments';
 import { assertObjectStorageConfigured } from './lib/objectStore';
@@ -23,6 +24,7 @@ const API_PORT = Number(process.env.API_PORT) || 3001;
 
 try {
   assertObjectStorageConfigured();
+  console.log(`[billing] ${billing.describeBilling()}`);
 } catch (err) {
   console.error(`[startup] ${(err as Error).message}`);
   process.exit(1);
@@ -109,6 +111,9 @@ app.use(cors({
   credentials: true,
 }));
 
+// Before the JSON parser: the webhook's signature covers the raw body.
+app.use('/api/billing/webhook', billing.billingWebhookRouter);
+
 app.use(express.json({ limit: '20mb' }));
 app.use(cookieParser());
 
@@ -121,6 +126,7 @@ app.use('/api/attachments', attachmentsRouter);
 app.use('/api/usage', usageRouter);
 app.use('/api/unfurl', unfurlRouter);
 app.use('/api/workspaces', workspacesRouter);
+app.use('/api/billing', billing.billingRouter);
 
 // ---------------------------------------------------------------------------
 // SPA – serve the Vite build in production

@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pipeline, Transform } from 'node:stream';
 import { requireAuth } from '../middleware/auth';
+import { requireEntitlement } from '../middleware/entitlement';
 import { getObjectStore } from '../lib/objectStore';
 import { currentKeyVersion, registryStmts } from '../db/registry';
 import type { AttachmentKind, AttachmentRow, UserRow } from '../db/registry';
@@ -33,6 +34,7 @@ const asyncRoute = (handler: (req: Request, res: Response) => Promise<unknown>) 
 };
 
 attachmentsRouter.use(requireAuth);
+attachmentsRouter.use(requireEntitlement);
 
 /** An id as the client makes it (a uuid); only the characters are checked, and they cannot name a path. */
 const ID = /^[A-Za-z0-9-]{1,64}$/;

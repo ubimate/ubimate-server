@@ -92,6 +92,29 @@ describe('auth router', () => {
     vi.resetModules();
   });
 
+  it('GET /registration says an invitation is required when REQUIRE_INVITATION is on', async () => {
+    const res = await fetch(`${baseUrl}/api/auth/registration`);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ invitationRequired: true });
+  });
+
+  it('GET /registration says none is required when REQUIRE_INVITATION=false', async () => {
+    process.env.REQUIRE_INVITATION = 'false';
+    vi.resetModules();
+    const { authRouter } = await import('../routes/auth');
+    const app = express();
+    app.use('/api/auth', authRouter);
+    const other = app.listen(0);
+    await new Promise<void>((resolve) => other.once('listening', resolve));
+    try {
+      const res = await fetch(`http://127.0.0.1:${(other.address() as AddressInfo).port}/api/auth/registration`);
+      expect(await res.json()).toEqual({ invitationRequired: false });
+    } finally {
+      await new Promise<void>((resolve) => other.close(() => resolve()));
+      (await import('../db/registry')).closeRegistryDb();
+    }
+  });
+
   it('registers an invited account and can issue a login token (ZK path)', async () => {
     const email = 'alice@example.com';
     const keypair = generateTestKeypair();

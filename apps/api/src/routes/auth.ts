@@ -11,6 +11,7 @@ import { issueCaptchaChallenge, verifyCaptchaPayload } from '../lib/captcha';
 import type { AuthPayload } from '@ubimate/types';
 import { trackEvent } from '../analytics';
 import { newAccountDiskQuotaBytes, withDiskQuota } from '../lib/quota';
+import billing from '../billing';
 
 /** The user's sealed Space keys as the auth endpoints return them (docs/ATTACHMENT-ENCRYPTION.md 5.1, 6). */
 function workspaceKeyEntries(userId: string) {
@@ -190,6 +191,14 @@ authRouter.get('/captcha', authLimiter, async (_req: Request, res: Response) => 
 });
 
 // ---------------------------------------------------------------------------
+// GET /api/auth/registration — what Create account needs on this server (docs/SIGN-UP.md): whether an
+// invitation's activation token is required. The forms ask for one only where it is.
+// ---------------------------------------------------------------------------
+authRouter.get('/registration', (_req: Request, res: Response) => {
+  res.json({ invitationRequired: REQUIRE_INVITATION });
+});
+
+// ---------------------------------------------------------------------------
 // POST /api/auth/register
 // ---------------------------------------------------------------------------
 authRouter.post('/register', authLimiter, async (req: Request, res: Response) => {
@@ -325,6 +334,8 @@ authRouter.post('/register', authLimiter, async (req: Request, res: Response) =>
   // Mark invitation as accepted
   if (matchedInvitation && matchedInvitation.accepted_at == null) {
     registryStmts.markInvitationAccepted.run(now, matchedInvitation.id);
+    // Complimentary access given with the invitation becomes the account's (docs/CREEM.md §4.10).
+    billing.grantFromInvitation(matchedInvitation.id, userId);
   }
 
   const token = jwt.sign({ sub: userId, email: normalizedEmail }, JWT_SECRET, {

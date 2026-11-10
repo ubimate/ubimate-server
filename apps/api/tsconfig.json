@@ -25,5 +25,5 @@
   // Tests are not part of the shipped build (and relayIntegration.test.ts
   // imports the client provider from apps/web, outside rootDir). They are
   // typechecked by src/__tests__/tsconfig.json instead.
-  "exclude": ["node_modules", "dist", "src/__tests__"]
+  "exclude": ["node_modules", "dist", "src/**/__tests__"]
 }

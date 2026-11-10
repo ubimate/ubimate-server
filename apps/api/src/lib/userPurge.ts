@@ -4,7 +4,8 @@
 /**
  * Deleting an account and everything the server holds for it (docs/ADMIN.md §2.7), for the admin's Delete.
  *
- * Order matters. Bucket objects go first: their only record is the `attachments` ledger, whose rows cascade
+ * Order matters. Creem subscriptions are cancelled first (docs/CREEM.md §5.2): their rows cascade away with
+ * the user, and a subscription left open would keep charging someone who has no account. Then bucket objects: their only record is the `attachments` ledger, whose rows cascade
  * away with the user, so an object left behind then could never be found again. If one cannot be removed
  * nothing else is touched and the caller can try again. Then the registry rows in one transaction, then the
  * live connections (a subscribed relay socket or a request in flight would recreate the database through
@@ -20,12 +21,17 @@ import { closeDocumentEventClients } from './documentEvents';
 import { getObjectStore } from './objectStore';
 import { removeObject } from './attachments';
 import { releaseReservation } from './quota';
+import billing from '../billing';
 
 const DATA_DIR = process.env.DATA_DIR ?? path.join(__dirname, '../../data');
 
 export type PurgeResult = { ok: true } | { ok: false; error: string };
 
 export async function purgeUser(userId: string): Promise<PurgeResult> {
+  // 0. Subscriptions at Creem, while the registry still lists them.
+  const cancelled = await billing.cancelSubscriptionsForDeletion(userId);
+  if (!cancelled.ok) return cancelled;
+
   const attachments = registryStmts.listAttachmentsOwnedBy.all(userId) as AttachmentRow[];
 
   // 1. Bucket objects, while the ledger still lists them.

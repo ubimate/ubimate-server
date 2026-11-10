@@ -18,6 +18,7 @@ import { registryStmts, getUserType } from '../db/registry';
 import type { InvitationRow, UserRow } from '../db/registry';
 import { sendActivationEmail, smtpConfigured } from '../email';
 import { purgeUser } from '../lib/userPurge';
+import billing from '../billing';
 import { getQuotaBytes, isValidQuotaBytes, listUsageByUser, withDiskQuota } from '../lib/quota';
 
 const DATA_DIR = process.env.DATA_DIR ?? path.join(__dirname, '../../data');
@@ -90,6 +91,9 @@ adminRouter.post('/login', adminLoginLimiter, async (req: Request, res: Response
 // All routes below require admin JWT
 // ---------------------------------------------------------------------------
 adminRouter.use(requireAdmin);
+
+// Grants and each account's plan, where the server bills (docs/CREEM.md §4.10).
+adminRouter.use('/billing', billing.billingAdminRouter);
 
 // ---------------------------------------------------------------------------
 // GET /api/admin/me
@@ -182,8 +186,9 @@ adminRouter.delete('/users/:id', async (req: Request, res: Response) => {
     return;
   }
 
-  // Everything the server holds for the account goes (lib/userPurge.ts). Nothing is deleted when an
-  // attachment in object storage cannot be removed: answer 502 and let the admin try again.
+  // Everything the server holds for the account goes (lib/userPurge.ts). Nothing is deleted when a Creem
+  // subscription cannot be cancelled or an attachment in object storage cannot be removed: answer 502 and
+  // let the admin try again.
   const result = await purgeUser(id);
   if (!result.ok) {
     res.status(502).json({ error: result.error });
@@ -268,12 +273,15 @@ adminRouter.post('/invitations', async (req: Request, res: Response) => {
     expires_at: clientExpiresAt,
     sender_signature,
     sender_public_key,
+    grant: requestedGrant,
   } = req.body as {
     email?: string;
     token?: string;
     expires_at?: number;
     sender_signature?: string;
     sender_public_key?: string;
+    /** Complimentary access the invited account gets, `{ plan, endsAt }` (docs/CREEM.md §4.10). */
+    grant?: unknown;
   };
 
   if (!email || typeof email !== 'string' || !email.includes('@')) {
@@ -291,6 +299,16 @@ adminRouter.post('/invitations', async (req: Request, res: Response) => {
   if (clientExpiresAt !== undefined && (typeof clientExpiresAt !== 'number' || !Number.isFinite(clientExpiresAt))) {
     res.status(400).json({ error: 'expires_at must be a numeric timestamp' });
     return;
+  }
+
+  let grant = null;
+  if (requestedGrant !== undefined && requestedGrant !== null) {
+    const checked = billing.checkGrant(requestedGrant);
+    if (!checked.ok) {
+      res.status(400).json({ error: checked.error });
+      return;
+    }
+    grant = checked.grant;
   }
 
   const normalizedEmail = email.trim().toLowerCase();
@@ -343,6 +361,8 @@ adminRouter.post('/invitations', async (req: Request, res: Response) => {
     sender_public_key: verifiedSenderPublicKey,
     sender_signature: verifiedSenderSignature,
   });
+  // Before the email: the invited person may register as soon as it arrives.
+  if (grant) billing.setInvitationGrant(id, grant);
 
   // Attempt to send email; don't fail the request if email sending fails
   let emailSent = false;
