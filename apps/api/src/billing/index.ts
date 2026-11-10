@@ -43,6 +43,7 @@ const billing: BillingModule = {
   checkGrant: () => ({ ok: false, error: 'This server does not bill: every account has full access already' }),
   setInvitationGrant: () => {},
   grantFromInvitation: () => {},
+  startBackgroundJobs: () => {},
 };
 
 export default billing;

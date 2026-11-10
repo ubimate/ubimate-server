@@ -34,4 +34,6 @@ export interface BillingModule {
   setInvitationGrant(invitationId: string, grant: BillingGrant): void;
   /** Called once an account registered with an invitation exists: the grant waiting on it becomes the account's. */
   grantFromInvitation(invitationId: string, userId: string): void;
+  /** Called once the server listens: what billing runs on a schedule (the reconcile, docs/CREEM.md §5.4). */
+  startBackgroundJobs(): void;
 }

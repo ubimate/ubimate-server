@@ -82,9 +82,11 @@ function useAdminApi(baseUrl: string, token: string | null) {
     [token],
   );
 
+  // Takes the URL just typed, not baseUrl: the sign-in form sets it and logs in in one handler,
+  // before the re-render that gives this hook the new one (it posted to the old URL until then).
   const login = useCallback(
-    async (username: string, password: string): Promise<{ token: string }> => {
-      const res = await fetch(`${baseUrl}/api/admin/login`, {
+    async (username: string, password: string, url: string): Promise<{ token: string }> => {
+      const res = await fetch(`${url}/api/admin/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password }),
@@ -95,7 +97,7 @@ function useAdminApi(baseUrl: string, token: string | null) {
       }
       return res.json() as Promise<{ token: string }>;
     },
-    [baseUrl],
+    [],
   );
 
   const fetchUsers = useCallback(async (): Promise<AdminUser[]> => {
@@ -314,7 +316,7 @@ const AdminLogin: React.FC<AdminLoginProps> = ({ onLogin, api, baseUrl, onSetBas
     setError(null);
     setLoading(true);
     try {
-      const { token } = await api.login(values.username, values.password);
+      const { token } = await api.login(values.username, values.password, trimmedUrl);
       onLogin(token);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed');

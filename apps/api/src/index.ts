@@ -226,4 +226,5 @@ server.listen(API_PORT, () => {
   console.log(`[app]   REST API at /api, WebSocket at /yjs`);
   scheduleUsageReconcile();
   scheduleAttachmentCleanup();
+  billing.startBackgroundJobs();
 });
