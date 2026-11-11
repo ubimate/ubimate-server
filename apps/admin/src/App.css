@@ -1,6 +1,11 @@
+/* Native scrollbars, form controls and the canvas follow the OS appearance.
+   antd's colours come from ConfigProvider in App.tsx. */
+:root {
+  color-scheme: light dark;
+}
+
 .admin-page {
   min-height: 100vh;
-  background: #f5f5f5;
   padding: 24px;
 }
 

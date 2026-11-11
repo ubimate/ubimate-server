@@ -3,6 +3,7 @@ import {
   Button,
   Card,
   Checkbox,
+  ConfigProvider,
   Form,
   Input,
   InputNumber,
@@ -16,6 +17,7 @@ import {
   Tooltip,
   Typography,
   message,
+  theme,
 } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 import './App.css';
@@ -366,6 +368,7 @@ const AdminDashboard: React.FC<{ api: ReturnType<typeof useAdminApi>; onLogout: 
   api,
   onLogout,
 }) => {
+  const { token } = theme.useToken();
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [invitations, setInvitations] = useState<AdminInvitation[]>([]);
   const [loadingUsers, setLoadingUsers] = useState(true);
@@ -748,7 +751,7 @@ const AdminDashboard: React.FC<{ api: ReturnType<typeof useAdminApi>; onLogout: 
   ];
 
   return (
-    <div className="admin-page">
+    <div className="admin-page" style={{ background: token.colorBgLayout }}>
       {contextHolder}
       {modalContextHolder}
       <div className="admin-header">
@@ -936,7 +939,31 @@ const AdminDashboard: React.FC<{ api: ReturnType<typeof useAdminApi>; onLogout: 
 // App (top-level)
 // ---------------------------------------------------------------------------
 
+/** Tracks the OS appearance setting; updates live when it changes. */
+function usePrefersDark(): boolean {
+  const query = '(prefers-color-scheme: dark)';
+  const [dark, setDark] = useState(() => window.matchMedia(query).matches);
+
+  useEffect(() => {
+    const mql = window.matchMedia(query);
+    const onChange = (e: MediaQueryListEvent) => setDark(e.matches);
+    mql.addEventListener('change', onChange);
+    return () => mql.removeEventListener('change', onChange);
+  }, []);
+
+  return dark;
+}
+
 export default function App() {
+  const dark = usePrefersDark();
+  return (
+    <ConfigProvider theme={{ algorithm: dark ? theme.darkAlgorithm : theme.defaultAlgorithm }}>
+      <AdminApp />
+    </ConfigProvider>
+  );
+}
+
+function AdminApp() {
   const [baseUrl, setBaseUrl] = useState<string>(() => {
     const stored = localStorage.getItem('ubimate_admin_url');
     // Default to the current origin so the app works out-of-the-box when
